@@ -347,6 +347,7 @@ async fn handle_list_key(app: &mut App, key: KeyEvent) -> Result<(), Box<dyn std
         }
         KeyCode::Char('f') => {
             app.view = View::Filters;
+            app.status_msg.clear();
         }
         KeyCode::Char('g') => {
             // Jump to first page

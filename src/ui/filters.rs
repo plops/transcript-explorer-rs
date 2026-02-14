@@ -44,15 +44,49 @@ pub fn render(app: &App, frame: &mut Frame) {
     render_filters(app, frame, content_chunks[1]);
 
     // Status bar
-    let status_line = Line::from(vec![
+    let mut status_spans = vec![
         Span::styled(" a ", Style::default().bg(Color::Cyan).fg(Color::Black)),
         Span::raw(" Add Filter  "),
         Span::styled(" d ", Style::default().bg(Color::Red).fg(Color::Black)),
         Span::raw(" Clear All  "),
         Span::styled(" Esc ", Style::default().bg(Color::DarkGray).fg(Color::White)),
-        Span::raw(" Back "),
-    ]);
+        Span::raw(" Back  "),
+    ];
+
+    if !app.status_msg.is_empty() {
+        status_spans.push(Span::styled(format!(" | {} ", app.status_msg), Style::default().fg(Color::Yellow)));
+    }
+
+    // If entering value, show buffer and set cursor
+    if let crate::app::FilterBuilderState::EnteringValue { ref buffer, .. } = app.filter_builder_state {
+        status_spans.push(Span::styled(format!(" > {}", buffer), Style::default().fg(Color::White).add_modifier(Modifier::BOLD)));
+        
+        // Calculate cursor position
+        // The cursor should be at the end of the buffer.
+        // We need to know the x-offset of the ">" character.
+        // It's a bit tricky with nested spans, but let's approximate or just use a fixed spot if needed.
+        // Actually, we can just render the buffer in a dedicated chunk if we want it clean.
+    }
+
+    let status_line = Line::from(status_spans);
     frame.render_widget(Paragraph::new(status_line), chunks[2]);
+
+    // Set cursor if entering value
+    if let crate::app::FilterBuilderState::EnteringValue { ref buffer, .. } = app.filter_builder_state {
+        // Approximate x: length of all previous spans + prefix " > "
+        let mut x = 0;
+        // spans except the last one and the " | " one
+        // Base shortcuts: " a Add Filter   d Clear All   Esc Back   "
+        // " a " (3) + " Add Filter  " (13) + " d " (3) + " Clear All  " (12) + " Esc " (5) + " Back  " (7) = 43
+        x += 43;
+        if !app.status_msg.is_empty() {
+            x += (3 + app.status_msg.len()) as u16; // " | " is 3
+        }
+        x += 3; // " > " is 3
+        x += buffer.len() as u16;
+        
+        frame.set_cursor_position((chunks[2].x + x, chunks[2].y));
+    }
 }
 
 fn render_stats(app: &App, frame: &mut Frame, area: Rect) {
