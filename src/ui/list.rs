@@ -24,7 +24,7 @@ pub fn render(app: &App, frame: &mut Frame) {
     // ── Header ──
     let header_text = format!(
         " Transcript Explorer   [{} entries]",
-        app.list_total
+        app.filtered_indices.len()
     );
     let header = Paragraph::new(header_text)
         .style(
@@ -105,9 +105,9 @@ pub fn render(app: &App, frame: &mut Frame) {
 
     let page_info = format!(
         " {}-{} of {} ",
-        app.list_offset + 1,
-        app.list_offset + app.list_items.len() as i64,
-        app.list_total
+        if app.filtered_indices.is_empty() { 0 } else { app.list_offset + 1 },
+        app.list_offset + app.list_items.len(),
+        app.filtered_indices.len()
     );
 
     let list_widget = List::new(items)

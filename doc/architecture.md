@@ -12,9 +12,9 @@ The application uses the `turso` crate, which is a pure Rust implementation of a
 
 ### 2. Application State (`src/app.rs`)
 The `App` struct acts as the central state machine.
-- **Multi-View Navigation**: Manages transitions between `List`, `Detail`, and `Similar` views.
-- **Pagination**: Implements a cursor-based pagination strategy, loading 100 rows at a time to maintain performance even with 10,000+ entries.
-- **Filtered State**: Manages the live filter string and triggers database refreshes upon input changes.
+- **In-Memory Caching**: Loads all transcript metadata into memory at startup (~3MB for 13k rows). This ensures that filtering by summary, host, or source link is instantaneous and synchronous.
+- **Pagination**: While search is in-memory, the UI still displays results in pages of 100 for visual clarity and scrolling performance.
+- **Synchronous Filtering**: Manages the live filter string and performs local character-matching, avoiding the overhead of database queries during active typing.
 
 ### 3. UI Layer (`src/ui/`)
 Built using `ratatui` with the `crossterm` backend.
@@ -33,8 +33,11 @@ sequenceDiagram
 
     User->>EventLoop: Keyboard Input
     EventLoop->>AppState: handle_key(Event)
-    AppState->>Database: query_transcripts(filter)
-    Database-->>AppState: Vec<Row>
+    AppState->>AppState: filter_items_locally(filter)
+    EventLoop->>User: redraw(Frame)
+    User->>AppState: Select Entry
+    AppState->>Database: get_transcript(id)
+    Database-->>AppState: TranscriptRow
     AppState-->>EventLoop: updated state
     EventLoop->>User: redraw(Frame)
 ```
@@ -42,7 +45,7 @@ sequenceDiagram
 ## Vector Search Implementation
 
 The application performs semantic similarity search by querying the `embedding` column (BLOB) stored in the database.
-1. The user selects a transcript.
-2. The app fetches its embedding blob.
-3. The app executes a SQL query that uses `vector_distance_cos` to find the top-20 nearest neighbors.
+1. The user selects a transcript with an embedding (marked with `●`).
+2. The app executes a SQL query that uses `vector_distance_cos` between the source and target.
+3. **Matryoshka Support**: Because the database contains mixed embedding sizes (3072 and 768 dimensions), the query uses `vector_slice(embedding, 0, 768)` on both operands to ensure compatibility.
 4. The results are displayed with similarity scores (calculated as `1.0 - distance`).

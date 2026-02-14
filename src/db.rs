@@ -30,6 +30,7 @@ pub struct TranscriptListItem {
     pub cost: f64,
     pub has_embedding: bool,
     pub model: String,
+    pub original_source_link: String, // Added to cache for in-memory filtering
 }
 
 /// Result of a vector similarity search.
@@ -86,74 +87,16 @@ impl Database {
         Ok(Database { conn })
     }
 
-    /// Count total rows in the items table.
-    pub async fn count(&self) -> turso::Result<i64> {
-        let mut rows = self.conn.query("SELECT COUNT(*) FROM items", ()).await?;
-        if let Some(row) = rows.next().await? {
-            Ok(val_i64(&row.get_value(0)?))
-        } else {
-            Ok(0)
-        }
-    }
-
-    /// Count rows matching a filter.
-    pub async fn count_filtered(&self, filter: &str) -> turso::Result<i64> {
-        if filter.is_empty() {
-            return self.count().await;
-        }
-        let pattern = format!("%{}%", filter);
-        let mut rows = self
-            .conn
-            .query(
-                "SELECT COUNT(*) FROM items WHERE summary LIKE ?1 OR host LIKE ?1 OR original_source_link LIKE ?1",
-                turso::params::Params::Positional(vec![Value::Text(pattern)]),
-            )
-            .await?;
-        if let Some(row) = rows.next().await? {
-            Ok(val_i64(&row.get_value(0)?))
-        } else {
-            Ok(0)
-        }
-    }
-
-    /// List transcripts with optional filter and pagination.
-    pub async fn list_transcripts(
-        &self,
-        filter: &str,
-        offset: i64,
-        limit: i64,
-    ) -> turso::Result<Vec<TranscriptListItem>> {
+    /// Load all transcripts metadata for in-memory caching.
+    pub async fn list_all_transcripts(&self) -> turso::Result<Vec<TranscriptListItem>> {
         let mut items = Vec::new();
-
-        let mut rows = if filter.is_empty() {
-            self.conn
-                .query(
-                    "SELECT identifier, host, substr(summary, 1, 120), cost, \
-                     CASE WHEN embedding IS NOT NULL THEN 1 ELSE 0 END, model \
-                     FROM items ORDER BY identifier LIMIT ?1 OFFSET ?2",
-                    turso::params::Params::Positional(vec![
-                        Value::Integer(limit),
-                        Value::Integer(offset),
-                    ]),
-                )
-                .await?
-        } else {
-            let pattern = format!("%{}%", filter);
-            self.conn
-                .query(
-                    "SELECT identifier, host, substr(summary, 1, 120), cost, \
-                     CASE WHEN embedding IS NOT NULL THEN 1 ELSE 0 END, model \
-                     FROM items \
-                     WHERE summary LIKE ?1 OR host LIKE ?1 OR original_source_link LIKE ?1 \
-                     ORDER BY identifier LIMIT ?2 OFFSET ?3",
-                    turso::params::Params::Positional(vec![
-                        Value::Text(pattern),
-                        Value::Integer(limit),
-                        Value::Integer(offset),
-                    ]),
-                )
-                .await?
-        };
+        let mut rows = self.conn.query(
+            "SELECT identifier, host, substr(summary, 1, 120), cost, \
+             CASE WHEN embedding IS NOT NULL THEN 1 ELSE 0 END, model, \
+             COALESCE(original_source_link, '') \
+             FROM items ORDER BY identifier",
+            (),
+        ).await?;
 
         while let Some(row) = rows.next().await? {
             items.push(TranscriptListItem {
@@ -163,9 +106,9 @@ impl Database {
                 cost: val_f64(&row.get_value(3)?),
                 has_embedding: val_i64(&row.get_value(4)?) == 1,
                 model: val_string(&row.get_value(5)?),
+                original_source_link: val_string(&row.get_value(6)?),
             });
         }
-
         Ok(items)
     }
 
@@ -212,7 +155,7 @@ impl Database {
     }
 
     /// Find transcripts similar to the given one using cosine distance.
-    /// Uses a subquery to get the source embedding and compute vector_distance_cos.
+    /// Uses vector_slice(..., 0, 768) to handle Matryoshka dimension mismatch.
     pub async fn find_similar(
         &self,
         source_id: i64,
@@ -220,12 +163,13 @@ impl Database {
     ) -> turso::Result<Vec<SimilarResult>> {
         let mut results = Vec::new();
 
-        // Use a subquery to get the source embedding and compute cosine distance
+        // Slice both source and target embeddings to 768 dimensions for comparison.
+        // This allows 3072-dim and 768-dim embeddings to be compared.
         let mut rows = self
             .conn
             .query(
                 "SELECT t.identifier, t.host, substr(t.summary, 1, 120), \
-                 vector_distance_cos(t.embedding, s.embedding) AS dist \
+                 vector_distance_cos(vector_slice(t.embedding, 0, 768), vector_slice(s.embedding, 0, 768)) AS dist \
                  FROM items t, (SELECT embedding FROM items WHERE identifier = ?1) s \
                  WHERE t.embedding IS NOT NULL AND t.identifier != ?1 \
                  ORDER BY dist \

@@ -49,13 +49,13 @@ Table: `items`
 ## Application Architecture
 
 - **`main.rs`**: Entry point, terminal setup/restoration, and event loop.
-- **`app.rs`**: State management (active view, selection, pagination, filtering).
-- **`db.rs`**: Turso-specific database queries using positional parameters and `rows.next().await?` pattern.
+- **`app.rs`**: State management (active view, selection, in-memory metadata cache, filtering).
+- **`db.rs`**: Turso-specific database queries. Uses `vector_slice` for all similarity comparisons to handle mismatched embedding dimensions.
 - **`ui/`**: Modular view rendering for List, Detail, Similar, and Help states.
 
 ## Navigation & Workflows
 
-1. **Browsing**: Scroll through all entries. Pagination (100 rows/page) ensures responsiveness.
-2. **Filtering**: Real-time SQL `LIKE` filtering on multiple columns.
-3. **Similarity**: One-click semantic search using the selected entry's embedding.
+1. **Browsing**: Scroll through all entries. In-memory metadata caching ensures high responsiveness.
+2. **Filtering**: Real-time, synchronous in-memory filtering as you type.
+3. **Similarity**: Semantic search using `vector_distance_cos` combined with `vector_slice(..., 0, 768)` to support Matryoshka embeddings.
 4. **Detail**: Multi-pane view for technical summaries and full transcripts.

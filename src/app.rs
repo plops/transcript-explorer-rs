@@ -58,14 +58,18 @@ pub struct App {
     pub view: View,
     pub show_help: bool,
 
+    // In-memory cache
+    pub all_items: Vec<TranscriptListItem>,
+    pub filtered_indices: Vec<usize>,
+
     // List view state
-    pub list_items: Vec<TranscriptListItem>,
-    pub list_selected: usize,
-    pub list_offset: i64,
-    pub list_total: i64,
+    pub list_items: Vec<TranscriptListItem>, // Current visible page
+    pub list_selected: usize,         // Index within visible page
+    pub list_offset: usize,           // Offset into filtered_indices
+    pub page_size: usize,
+
     pub filter: String,
     pub input_mode: InputMode,
-    pub page_size: i64,
 
     // Detail view state
     pub detail: Option<TranscriptRow>,
@@ -90,13 +94,16 @@ impl App {
             view: View::List,
             show_help: false,
 
+            all_items: Vec::new(),
+            filtered_indices: Vec::new(),
+
             list_items: Vec::new(),
             list_selected: 0,
             list_offset: 0,
-            list_total: 0,
+            page_size: 100,
+
             filter: String::new(),
             input_mode: InputMode::Normal,
-            page_size: 100,
 
             detail: None,
             detail_tab: DetailTab::Summary,
@@ -107,64 +114,57 @@ impl App {
             similar_source_id: 0,
             similar_source_preview: String::new(),
 
-            status_msg: String::new(),
+            status_msg: "Loading database...".to_string(),
         }
     }
 
     /// Initial data load.
     pub async fn init(&mut self) -> turso::Result<()> {
-        self.list_total = self.db.count().await?;
-        self.refresh_list().await?;
-        self.status_msg = format!("{} transcripts loaded", self.list_total);
+        self.all_items = self.db.list_all_transcripts().await?;
+        self.filtered_indices = (0..self.all_items.len()).collect();
+        self.update_list_page();
+        self.status_msg = format!("{} transcripts loaded", self.all_items.len());
         Ok(())
     }
 
-    /// Refresh the list from current offset/filter.
-    pub async fn refresh_list(&mut self) -> turso::Result<()> {
-        self.list_total = self.db.count_filtered(&self.filter).await?;
-        self.list_items = self
-            .db
-            .list_transcripts(&self.filter, self.list_offset, self.page_size)
-            .await?;
-        // Clamp selection
-        if self.list_items.is_empty() {
-            self.list_selected = 0;
-        } else if self.list_selected >= self.list_items.len() {
-            self.list_selected = self.list_items.len() - 1;
-        }
-        Ok(())
+    /// Update the current page of visible items based on offset.
+    pub fn update_list_page(&mut self) {
+        let start = self.list_offset;
+        let end = (start + self.page_size).min(self.filtered_indices.len());
+        self.list_items = self.filtered_indices[start..end]
+            .iter()
+            .map(|&i| self.all_items[i].clone())
+            .collect();
     }
 
     /// Move selection down in the list.
-    pub async fn list_next(&mut self) -> turso::Result<()> {
+    pub fn list_next(&mut self) {
         if self.list_items.is_empty() {
-            return Ok(());
+            return;
         }
         if self.list_selected + 1 < self.list_items.len() {
             self.list_selected += 1;
         } else {
-            // Try to load next page
+            // Next page
             let new_offset = self.list_offset + self.page_size;
-            if new_offset < self.list_total {
+            if new_offset < self.filtered_indices.len() {
                 self.list_offset = new_offset;
                 self.list_selected = 0;
-                self.refresh_list().await?;
+                self.update_list_page();
             }
         }
-        Ok(())
     }
 
     /// Move selection up in the list.
-    pub async fn list_prev(&mut self) -> turso::Result<()> {
+    pub fn list_prev(&mut self) {
         if self.list_selected > 0 {
             self.list_selected -= 1;
         } else if self.list_offset > 0 {
-            // Go to previous page
-            self.list_offset = (self.list_offset - self.page_size).max(0);
-            self.refresh_list().await?;
+            // Prev page
+            self.list_offset = self.list_offset.saturating_sub(self.page_size);
+            self.update_list_page();
             self.list_selected = self.list_items.len().saturating_sub(1);
         }
-        Ok(())
     }
 
     /// Open the detail view for the currently selected item.
@@ -219,7 +219,10 @@ impl App {
         self.status_msg = "Computing similarities...".to_string();
         self.similar_source_id = id;
         self.similar_source_preview = preview;
+        
+        // This will now use vector_slice(..., 0, 768) and handles the dimension mismatch.
         self.similar_results = self.db.find_similar(id, 20).await?;
+        
         self.similar_selected = 0;
         self.view = View::Similar;
         self.status_msg = format!("Found {} similar transcripts", self.similar_results.len());
@@ -227,20 +230,31 @@ impl App {
     }
 
     /// Apply filter and reset list.
-    pub async fn apply_filter(&mut self) -> turso::Result<()> {
+    pub fn apply_filter(&mut self) {
+        let filter = self.filter.to_lowercase();
+        self.filtered_indices.clear();
+        
+        if filter.is_empty() {
+            self.filtered_indices = (0..self.all_items.len()).collect();
+        } else {
+            for (i, item) in self.all_items.iter().enumerate() {
+                if item.summary_preview.to_lowercase().contains(&filter) 
+                   || item.host.to_lowercase().contains(&filter)
+                   || item.original_source_link.to_lowercase().contains(&filter) {
+                    self.filtered_indices.push(i);
+                }
+            }
+        }
+        
         self.list_offset = 0;
         self.list_selected = 0;
-        self.refresh_list().await?;
+        self.update_list_page();
+        
         self.status_msg = format!(
             "{} results for \"{}\"",
-            self.list_total,
-            if self.filter.is_empty() {
-                "all"
-            } else {
-                &self.filter
-            }
+            self.filtered_indices.len(),
+            if self.filter.is_empty() { "all" } else { &self.filter }
         );
-        Ok(())
     }
 
     pub fn scroll_down(&mut self) {

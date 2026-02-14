@@ -19,7 +19,7 @@
 - [x] Fix compilation errors related to Turso `Rows` API (non-stream)
 - [x] Verify application startup and data loading (13,000+ entries)
 - [x] Implement clipboard integration (yank link)
-- [/] Final documentation (Root README, `doc/`, `doc/spec/`)
+- [x] Final documentation (Root README, `doc/`, `doc/spec/`)
 
 ## Future Work
 - [ ] Automated cross-platform binary releases (CI/CD)

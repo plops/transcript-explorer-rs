@@ -114,7 +114,7 @@ async fn handle_filter_input(
     match key.code {
         KeyCode::Enter => {
             app.input_mode = InputMode::Normal;
-            app.apply_filter().await?;
+            app.apply_filter();
         }
         KeyCode::Esc => {
             app.input_mode = InputMode::Normal;
@@ -139,10 +139,10 @@ async fn handle_list_key(app: &mut App, key: KeyEvent) -> Result<(), Box<dyn std
             app.input_mode = InputMode::Editing;
         }
         KeyCode::Down | KeyCode::Char('j') => {
-            app.list_next().await?;
+            app.list_next();
         }
         KeyCode::Up | KeyCode::Char('k') => {
-            app.list_prev().await?;
+            app.list_prev();
         }
         KeyCode::Enter => {
             app.open_detail().await?;
@@ -154,20 +154,22 @@ async fn handle_list_key(app: &mut App, key: KeyEvent) -> Result<(), Box<dyn std
             // Jump to first page
             app.list_offset = 0;
             app.list_selected = 0;
-            app.refresh_list().await?;
+            app.update_list_page();
         }
         KeyCode::Char('G') => {
             // Jump to last page
-            let last_page_offset = ((app.list_total - 1) / app.page_size) * app.page_size;
-            app.list_offset = last_page_offset.max(0);
-            app.refresh_list().await?;
-            app.list_selected = app.list_items.len().saturating_sub(1);
+            if !app.filtered_indices.is_empty() {
+                let last_page_start = (app.filtered_indices.len().saturating_sub(1) / app.page_size) * app.page_size;
+                app.list_offset = last_page_start;
+                app.update_list_page();
+                app.list_selected = app.list_items.len().saturating_sub(1);
+            }
         }
         KeyCode::Esc => {
             // Clear filter
             if !app.filter.is_empty() {
                 app.filter.clear();
-                app.apply_filter().await?;
+                app.apply_filter();
             }
         }
         _ => {}

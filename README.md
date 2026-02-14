@@ -7,7 +7,7 @@ A cross-platform Rust Terminal User Interface (TUI) for browsing, searching, and
 ## Features
 
 - **Blazing Fast**: Built with Rust and Turso (pure Rust SQLite engine).
-- **Search & Filter**: Live filtering of thousands of entries by summary, host, or source link.
+- **Instantaneous Search**: Real-time, in-memory filtering of thousands of entries as you type.
 - **Detailed View**: Metadata header with costs/tokens, and tabs for Summary, Transcript, and Timestamps.
 - **Vector Similarity**: Find related transcripts using built-in vector similarity search (cosine distance).
 - **Portable**: Small, self-contained binary with no C dependencies.
