@@ -23,6 +23,10 @@ Built using `ratatui` with the `crossterm` backend.
 - **Custom Widgets**: Utilizes `List`, `Paragraph`, `Tabs`, and `Clear` widgets to build a multi-pane interface.
 - **Layouts**: Uses constraint-based layouts to ensure the app scales properly across various terminal sizes.
 
+### 4. Maintenance Tools (`tools/`)
+The project includes specialized tools for database preparation and sharing.
+- **Cleanup Script (`cleanup_db.py`)**: A Python-based utility used to prepare datasets for public distribution. It removes error entries, strips large transcript data, and truncates high-dimensional embeddings to 768 dimensions to optimize for similarity search while reducing disk footprint.
+
 ## Data Flow
 
 ```mermaid

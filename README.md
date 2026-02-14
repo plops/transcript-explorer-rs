@@ -60,6 +60,7 @@ Run the binary by providing the path to your `summaries.db` file:
 
 - [Architecture & Design](doc/architecture.md)
 - [UI Patterns](doc/ui_patterns.md)
+- [Database Maintenance & Tools](doc/database_maintenance.md)
 - [Release Process](doc/release_process.md)
 - [Specification & Research](doc/spec/)
 
