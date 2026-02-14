@@ -51,4 +51,7 @@ If you need to build the project locally for your current platform:
 cargo build --release
 ```
 
+> [!IMPORTANT]
+> Ensure `Cargo.toml` specifies `opt-level = 3` in the `[profile.release]` section. Using `opt-level = "z"` will severely impact encryption performance (1 Gbit/s vs 50 Mbit/s).
+
 The resulting binary will be located at `target/release/transcript-explorer`.

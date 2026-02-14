@@ -59,6 +59,7 @@ transcript-explorer --db data/summaries.db.age
 
 - **Streamed Processing**: Encryption and decryption are streamed to minimize memory usage, though compression buffers chunks in memory.
 - **Parallel Compression**: Uses `rayon` to compress 1MB chunks in parallel. Each chunk is an independent Brotli stream, concatenated to form the final file. This saturates available CPU cores.
+- **Critical Build Configuration**: Encryption performance relies heavily on compiler optimizations. The `release` profile must use `opt-level = 3` (speed) rather than `z` (size) to achieve >1GB/s throughput.
 - **Performance Metrics**: The CLI outputs detailed timing logs to stdout, measuring:
     - Input read time
     - Compression time (parallel)

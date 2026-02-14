@@ -1,6 +1,6 @@
 [package]
 name = "transcript-explorer"
-version = "1.1.1"
+version = "1.1.2"
 edition = "2024"
 description = "TUI explorer for YouTube transcript summaries stored in SQLite"
 
@@ -19,7 +19,7 @@ tempfile = "3"
 rayon = "1.11"
 
 [profile.release]
-opt-level = "z"
+opt-level = 3
 lto = true
 strip = true
 codegen-units = 1

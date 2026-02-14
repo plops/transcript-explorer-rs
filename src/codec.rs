@@ -55,14 +55,16 @@ pub fn encrypt_stream(
     let start_enc = std::time::Instant::now();
     let encryptor = age::Encryptor::with_user_passphrase(Secret::new(password.expose_secret().clone()));
     let mut writer = encryptor.wrap_output(output_writer)?;
+    println!("Encryption Header (Scrypt): {:?}", start_enc.elapsed());
 
+    let start_stream = std::time::Instant::now();
     // Write all compressed chunks sequentially
     for chunk in compressed_chunks {
         writer.write_all(&chunk)?;
     }
     
     writer.finish()?;
-    println!("Encryption: {:?}", start_enc.elapsed());
+    println!("Encryption Stream: {:?}", start_stream.elapsed());
     println!("Total Encrypt Time: {:?}", start_total.elapsed());
 
     Ok(())
