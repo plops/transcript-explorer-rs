@@ -111,21 +111,27 @@ async fn handle_filter_input(
     app: &mut App,
     key: KeyEvent,
 ) -> Result<(), Box<dyn std::error::Error>> {
+    let mut changed = false;
     match key.code {
         KeyCode::Enter => {
             app.input_mode = InputMode::Normal;
-            app.apply_filter();
         }
         KeyCode::Esc => {
             app.input_mode = InputMode::Normal;
         }
         KeyCode::Backspace => {
             app.filter.pop();
+            changed = true;
         }
         KeyCode::Char(c) => {
             app.filter.push(c);
+            changed = true;
         }
         _ => {}
+    }
+    
+    if changed {
+        app.apply_filter();
     }
     Ok(())
 }
@@ -144,6 +150,15 @@ async fn handle_list_key(app: &mut App, key: KeyEvent) -> Result<(), Box<dyn std
         KeyCode::Up | KeyCode::Char('k') => {
             app.list_prev();
         }
+        KeyCode::PageDown => {
+            app.list_page_down();
+        }
+        KeyCode::PageUp => {
+            app.list_page_up();
+        }
+        KeyCode::Char(' ') => {
+            app.toggle_expand();
+        }
         KeyCode::Enter => {
             app.open_detail().await?;
         }
@@ -158,8 +173,8 @@ async fn handle_list_key(app: &mut App, key: KeyEvent) -> Result<(), Box<dyn std
         }
         KeyCode::Char('G') => {
             // Jump to last page
-            if !app.filtered_indices.is_empty() {
-                let last_page_start = (app.filtered_indices.len().saturating_sub(1) / app.page_size) * app.page_size;
+            if !app.grouped_items.is_empty() {
+                let last_page_start = (app.grouped_items.len().saturating_sub(1) / app.page_size) * app.page_size;
                 app.list_offset = last_page_start;
                 app.update_list_page();
                 app.list_selected = app.list_items.len().saturating_sub(1);

@@ -8,6 +8,7 @@ A cross-platform Rust Terminal User Interface (TUI) for browsing, searching, and
 
 - **Blazing Fast**: Built with Rust and Turso (pure Rust SQLite engine).
 - **Instantaneous Search**: Real-time, in-memory filtering of thousands of entries as you type.
+- **Smart Grouping**: Consecutive identical summaries are automatically collapsed into groups for a cleaner browsing experience.
 - **Detailed View**: Metadata header with costs/tokens, and tabs for Summary, Transcript, and Timestamps.
 - **Vector Similarity**: Find related transcripts using built-in vector similarity search (cosine distance).
 - **Portable**: Small, self-contained binary with no C dependencies.
@@ -38,8 +39,10 @@ Run the binary by providing the path to your `summaries.db` file:
 | Key | Action |
 |-----|--------|
 | `↑`/`↓` or `j`/`k` | Navigate lists / scroll content |
+| `PgUp`/`PgDn` | Page up/down in lists and content |
+| `Space` | Expand/Collapse duplicate group |
 | `Enter` | Open detail view / select result |
-| `/` | Focus filter bar (type to search) |
+| `/` | Focus filter bar (live search) |
 | `s` | Find similar transcripts (vector search) |
 | `Tab` / `1-3` | Switch detail tabs (Summary, Transcript, Timestamps) |
 | `y` | Yank source link to clipboard |

@@ -21,7 +21,9 @@
 - [x] Implement clipboard integration (yank link)
 - [x] Final documentation (Root README, `doc/`, `doc/spec/`)
 
-## Future Work
-- [ ] Automated cross-platform binary releases (CI/CD)
-- [ ] Advanced title extraction heuristics
-- [ ] Export summary/transcript to file
+## Phase 4: UI Refinements & Better Search
+- [x] Implement PageUp/Down in list view
+- [x] Enable live-search (update on every keystroke)
+- [x] Implement title heuristic (skip "Abstract:", etc.)
+- [x] Implement collapsing of consecutive duplicates
+- [x] Add toggle for uncollapsing groups

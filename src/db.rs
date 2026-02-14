@@ -91,7 +91,7 @@ impl Database {
     pub async fn list_all_transcripts(&self) -> turso::Result<Vec<TranscriptListItem>> {
         let mut items = Vec::new();
         let mut rows = self.conn.query(
-            "SELECT identifier, host, substr(summary, 1, 120), cost, \
+            "SELECT identifier, host, substr(summary, 1, 500), cost, \
              CASE WHEN embedding IS NOT NULL THEN 1 ELSE 0 END, model, \
              COALESCE(original_source_link, '') \
              FROM items ORDER BY identifier",
@@ -168,7 +168,7 @@ impl Database {
         let mut rows = self
             .conn
             .query(
-                "SELECT t.identifier, t.host, substr(t.summary, 1, 120), \
+                "SELECT t.identifier, t.host, substr(t.summary, 1, 500), \
                  vector_distance_cos(vector_slice(t.embedding, 0, 768), vector_slice(s.embedding, 0, 768)) AS dist \
                  FROM items t, (SELECT embedding FROM items WHERE identifier = ?1) s \
                  WHERE t.embedding IS NOT NULL AND t.identifier != ?1 \

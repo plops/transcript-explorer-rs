@@ -55,7 +55,10 @@ Table: `items`
 
 ## Navigation & Workflows
 
-1. **Browsing**: Scroll through all entries. In-memory metadata caching ensures high responsiveness.
-2. **Filtering**: Real-time, synchronous in-memory filtering as you type.
+1. **Browsing**: Scroll through all entries. In-memory metadata caching ensures high responsiveness. Includes **PageUp/Down** support.
+2. **Filtering**: Real-time, synchronous in-memory filtering that updates **after every keystroke**.
 3. **Similarity**: Semantic search using `vector_distance_cos` combined with `vector_slice(..., 0, 768)` to support Matryoshka embeddings.
 4. **Detail**: Multi-pane view for technical summaries and full transcripts.
+5. **UI Refinements**:
+   - **Title Heuristics**: Skip generic prefixes like "**Abstract:**" when extracting list titles.
+   - **Entry Collapsing**: Automatically collapse consecutive identical entries, with a toggle to expand.

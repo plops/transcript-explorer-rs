@@ -51,6 +51,13 @@ pub enum InputMode {
     Editing,
 }
 
+/// A group of consecutive identical entries.
+#[derive(Debug, Clone)]
+pub struct TranscriptGroup {
+    pub items: Vec<TranscriptListItem>,
+    pub expanded: bool,
+}
+
 /// Main application state.
 pub struct App {
     pub db: Database,
@@ -62,10 +69,13 @@ pub struct App {
     pub all_items: Vec<TranscriptListItem>,
     pub filtered_indices: Vec<usize>,
 
+    // Grouped items for the list display
+    pub grouped_items: Vec<TranscriptGroup>,
+    
     // List view state
-    pub list_items: Vec<TranscriptListItem>, // Current visible page
-    pub list_selected: usize,         // Index within visible page
-    pub list_offset: usize,           // Offset into filtered_indices
+    pub list_items: Vec<TranscriptGroup>, // Current visible page of groups
+    pub list_selected: usize,              // Index within visible page
+    pub list_offset: usize,                // Offset into grouped_items
     pub page_size: usize,
 
     pub filter: String,
@@ -96,11 +106,12 @@ impl App {
 
             all_items: Vec::new(),
             filtered_indices: Vec::new(),
+            grouped_items: Vec::new(),
 
             list_items: Vec::new(),
             list_selected: 0,
             list_offset: 0,
-            page_size: 100,
+            page_size: 50, // Groups can be large, so smaller page size
 
             filter: String::new(),
             input_mode: InputMode::Normal,
@@ -121,8 +132,7 @@ impl App {
     /// Initial data load.
     pub async fn init(&mut self) -> turso::Result<()> {
         self.all_items = self.db.list_all_transcripts().await?;
-        self.filtered_indices = (0..self.all_items.len()).collect();
-        self.update_list_page();
+        self.apply_filter();
         self.status_msg = format!("{} transcripts loaded", self.all_items.len());
         Ok(())
     }
@@ -130,11 +140,8 @@ impl App {
     /// Update the current page of visible items based on offset.
     pub fn update_list_page(&mut self) {
         let start = self.list_offset;
-        let end = (start + self.page_size).min(self.filtered_indices.len());
-        self.list_items = self.filtered_indices[start..end]
-            .iter()
-            .map(|&i| self.all_items[i].clone())
-            .collect();
+        let end = (start + self.page_size).min(self.grouped_items.len());
+        self.list_items = self.grouped_items[start..end].to_vec();
     }
 
     /// Move selection down in the list.
@@ -147,7 +154,7 @@ impl App {
         } else {
             // Next page
             let new_offset = self.list_offset + self.page_size;
-            if new_offset < self.filtered_indices.len() {
+            if new_offset < self.grouped_items.len() {
                 self.list_offset = new_offset;
                 self.list_selected = 0;
                 self.update_list_page();
@@ -167,18 +174,56 @@ impl App {
         }
     }
 
+    pub fn list_page_down(&mut self) {
+        let new_offset = self.list_offset + self.page_size;
+        if new_offset < self.grouped_items.len() {
+            self.list_offset = new_offset;
+            self.update_list_page();
+            self.list_selected = 0;
+        } else {
+            // Go to end
+            let last_page_start = (self.grouped_items.len().saturating_sub(1) / self.page_size) * self.page_size;
+            self.list_offset = last_page_start;
+            self.update_list_page();
+            self.list_selected = self.list_items.len().saturating_sub(1);
+        }
+    }
+
+    pub fn list_page_up(&mut self) {
+        if self.list_offset > 0 {
+            self.list_offset = self.list_offset.saturating_sub(self.page_size);
+            self.update_list_page();
+            self.list_selected = 0;
+        } else {
+            self.list_selected = 0;
+        }
+    }
+
     /// Open the detail view for the currently selected item.
     pub async fn open_detail(&mut self) -> turso::Result<()> {
-        if let Some(item) = self.list_items.get(self.list_selected) {
-            let id = item.identifier;
-            if let Some(row) = self.db.get_transcript(id).await? {
-                self.detail = Some(row);
-                self.detail_tab = DetailTab::Summary;
-                self.detail_scroll = 0;
-                self.view = View::Detail;
+        if let Some(group) = self.list_items.get(self.list_selected) {
+            if let Some(item) = group.items.first() {
+                let id = item.identifier;
+                if let Some(row) = self.db.get_transcript(id).await? {
+                    self.detail = Some(row);
+                    self.detail_tab = DetailTab::Summary;
+                    self.detail_scroll = 0;
+                    self.view = View::Detail;
+                }
             }
         }
         Ok(())
+    }
+
+    /// Toggle expansion of the currently selected group.
+    pub fn toggle_expand(&mut self) {
+        if let Some(group) = self.list_items.get_mut(self.list_selected) {
+            group.expanded = !group.expanded;
+            // Sync back to grouped_items
+            if let Some(g) = self.grouped_items.get_mut(self.list_offset + self.list_selected) {
+                g.expanded = group.expanded;
+            }
+        }
     }
 
     /// Open detail for a specific identifier (used from similar view).
@@ -203,12 +248,16 @@ impl App {
                 }
             }
             View::List => {
-                if let Some(item) = self.list_items.get(self.list_selected) {
-                    if !item.has_embedding {
-                        self.status_msg = "No embedding for this entry".to_string();
+                if let Some(group) = self.list_items.get(self.list_selected) {
+                    if let Some(item) = group.items.first() {
+                        if !item.has_embedding {
+                            self.status_msg = "No embedding for this entry".to_string();
+                            return Ok(());
+                        }
+                        (item.identifier, item.summary_preview.clone())
+                    } else {
                         return Ok(());
                     }
-                    (item.identifier, item.summary_preview.clone())
                 } else {
                     return Ok(());
                 }
@@ -220,7 +269,6 @@ impl App {
         self.similar_source_id = id;
         self.similar_source_preview = preview;
         
-        // This will now use vector_slice(..., 0, 768) and handles the dimension mismatch.
         self.similar_results = self.db.find_similar(id, 20).await?;
         
         self.similar_selected = 0;
@@ -246,13 +294,43 @@ impl App {
             }
         }
         
+        // Grouping logic
+        self.grouped_items.clear();
+        if !self.filtered_indices.is_empty() {
+            let mut current_group: Vec<TranscriptListItem> = Vec::new();
+            
+            for &idx in &self.filtered_indices {
+                let item = &self.all_items[idx];
+                if let Some(last) = current_group.last() {
+                    // Group if summary is near-identical (just heuristic)
+                    if last.summary_preview == item.summary_preview {
+                        current_group.push(item.clone());
+                    } else {
+                        self.grouped_items.push(TranscriptGroup {
+                            items: current_group,
+                            expanded: false,
+                        });
+                        current_group = vec![item.clone()];
+                    }
+                } else {
+                    current_group.push(item.clone());
+                }
+            }
+            if !current_group.is_empty() {
+                self.grouped_items.push(TranscriptGroup {
+                    items: current_group,
+                    expanded: false,
+                });
+            }
+        }
+
         self.list_offset = 0;
         self.list_selected = 0;
         self.update_list_page();
         
         self.status_msg = format!(
-            "{} results for \"{}\"",
-            self.filtered_indices.len(),
+            "{} groups found for \"{}\"",
+            self.grouped_items.len(),
             if self.filter.is_empty() { "all" } else { &self.filter }
         );
     }
@@ -272,4 +350,40 @@ impl App {
     pub fn scroll_page_up(&mut self) {
         self.detail_scroll = self.detail_scroll.saturating_sub(20);
     }
+}
+
+/// Helper to get a meaningful title prefix by skipping generic leads.
+pub fn get_display_title(preview: &str) -> String {
+    let lines: Vec<&str> = preview.lines().collect();
+    if lines.is_empty() {
+        return "No summary".to_string();
+    }
+
+    for line in lines {
+        let trimmed = line.trim();
+        if trimmed.is_empty() {
+            continue;
+        }
+
+        // Heuristic: skip lines that are just generic titles
+        let lower = trimmed.to_lowercase();
+        if lower.starts_with("**abstract:**") {
+            // Find the first sentence after the bold
+            if let Some(idx) = trimmed.find("**:") {
+                let rest = &trimmed[idx + 3..].trim();
+                if !rest.is_empty() {
+                    return rest.to_string();
+                }
+            }
+            continue;
+        }
+        
+        if lower.starts_with("okay, here is the abstract") {
+            continue;
+        }
+
+        return trimmed.to_string();
+    }
+
+    preview.lines().next().unwrap_or("").to_string()
 }

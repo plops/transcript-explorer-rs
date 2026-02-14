@@ -1,4 +1,4 @@
-use crate::app::{App, InputMode};
+use crate::app::{self, App, InputMode};
 use ratatui::{
     Frame,
     layout::{Alignment, Constraint, Direction, Layout},
@@ -22,9 +22,16 @@ pub fn render(app: &App, frame: &mut Frame) {
         .split(area);
 
     // ── Header ──
-    let header_text = format!(
-        " Transcript Explorer   [{} entries]",
+    let entries_count = if app.filter.is_empty() {
+        app.all_items.len()
+    } else {
         app.filtered_indices.len()
+    };
+    
+    let header_text = format!(
+        " Transcript Explorer   [{} entries in {} groups]",
+        entries_count,
+        app.grouped_items.len()
     );
     let header = Paragraph::new(header_text)
         .style(
@@ -46,7 +53,7 @@ pub fn render(app: &App, frame: &mut Frame) {
         InputMode::Normal => Style::default().fg(Color::DarkGray),
     };
     let filter_label = if app.input_mode == InputMode::Editing {
-        " 🔍 Filter (Enter to apply, Esc to cancel): "
+        " 🔍 Filter (Esc to finish): "
     } else {
         " 🔍 Filter (/): "
     };
@@ -69,45 +76,73 @@ pub fn render(app: &App, frame: &mut Frame) {
     }
 
     // ── List ──
-    let items: Vec<ListItem> = app
-        .list_items
-        .iter()
-        .map(|item| {
-            let emb_indicator = if item.has_embedding { "●" } else { "○" };
-            let preview = item
-                .summary_preview
-                .lines()
-                .next()
-                .unwrap_or("")
-                .trim();
-            let line = Line::from(vec![
-                Span::styled(
-                    format!("{:>5} ", item.identifier),
-                    Style::default().fg(Color::DarkGray),
-                ),
-                Span::styled(
-                    format!("{} ", emb_indicator),
-                    Style::default().fg(if item.has_embedding {
-                        Color::Green
-                    } else {
-                        Color::DarkGray
-                    }),
-                ),
-                Span::raw(truncate_str(preview, (area.width as usize).saturating_sub(30))),
-                Span::styled(
-                    format!("  ${:.3}", item.cost),
-                    Style::default().fg(Color::Yellow),
-                ),
-            ]);
-            ListItem::new(line)
-        })
-        .collect();
+    let mut items = Vec::new();
+    for group in &app.list_items {
+        if group.items.is_empty() {
+            continue;
+        }
+
+        let first = &group.items[0];
+        let emb_indicator = if first.has_embedding { "●" } else { "○" };
+        let title = app::get_display_title(&first.summary_preview);
+        
+        let mut line_spans = vec![
+            Span::styled(
+                format!("{:>5} ", first.identifier),
+                Style::default().fg(Color::DarkGray),
+            ),
+            Span::styled(
+                format!("{} ", emb_indicator),
+                Style::default().fg(if first.has_embedding {
+                    Color::Green
+                } else {
+                    Color::DarkGray
+                }),
+            ),
+        ];
+
+        if !group.expanded && group.items.len() > 1 {
+            line_spans.push(Span::styled(
+                format!("[+{}] ", group.items.len() - 1),
+                Style::default().fg(Color::Magenta).add_modifier(Modifier::BOLD),
+            ));
+        } else if group.expanded {
+            line_spans.push(Span::styled(
+                "[-] ",
+                Style::default().fg(Color::Magenta).add_modifier(Modifier::BOLD),
+            ));
+        }
+
+        line_spans.push(Span::raw(truncate_str(&title, (area.width as usize).saturating_sub(40))));
+        
+        line_spans.push(Span::styled(
+            format!("  ${:.3}", first.cost),
+            Style::default().fg(Color::Yellow),
+        ));
+
+        items.push(ListItem::new(Line::from(line_spans)));
+
+        // If expanded, show other items or a marker
+        if group.expanded {
+            for sub_item in group.items.iter().skip(1) {
+                let sub_line = Line::from(vec![
+                    Span::raw("      "), // padding
+                    Span::styled(
+                        format!("⤷ {:>5} ", sub_item.identifier),
+                        Style::default().fg(Color::DarkGray),
+                    ),
+                    Span::raw(" (duplicate summary)"),
+                ]);
+                items.push(ListItem::new(sub_line));
+            }
+        }
+    }
 
     let page_info = format!(
-        " {}-{} of {} ",
-        if app.filtered_indices.is_empty() { 0 } else { app.list_offset + 1 },
+        " Group {}-{} of {} ",
+        if app.grouped_items.is_empty() { 0 } else { app.list_offset + 1 },
         app.list_offset + app.list_items.len(),
-        app.filtered_indices.len()
+        app.grouped_items.len()
     );
 
     let list_widget = List::new(items)
@@ -133,47 +168,54 @@ pub fn render(app: &App, frame: &mut Frame) {
     // ── Status bar ──
     let status_line = Line::from(vec![
         Span::styled(
-            " ↑↓",
+            " ↑↓/PgUpDn",
             Style::default()
                 .fg(Color::Cyan)
                 .add_modifier(Modifier::BOLD),
         ),
-        Span::raw(" Navigate  "),
+        Span::raw(" Nav "),
+        Span::styled(
+            "Space",
+            Style::default()
+                .fg(Color::Cyan)
+                .add_modifier(Modifier::BOLD),
+        ),
+        Span::raw(" Expand "),
         Span::styled(
             "/",
             Style::default()
                 .fg(Color::Cyan)
                 .add_modifier(Modifier::BOLD),
         ),
-        Span::raw("Search  "),
+        Span::raw("Filter "),
         Span::styled(
             "Enter",
             Style::default()
                 .fg(Color::Cyan)
                 .add_modifier(Modifier::BOLD),
         ),
-        Span::raw(" Detail  "),
-        Span::styled(
+        Span::raw(" Detail "),
+         Span::styled(
             "s",
-            Style::default()
+             Style::default()
                 .fg(Color::Cyan)
                 .add_modifier(Modifier::BOLD),
         ),
-        Span::raw(" Similar  "),
+        Span::raw(" Similar "),
         Span::styled(
             "?",
             Style::default()
                 .fg(Color::Cyan)
                 .add_modifier(Modifier::BOLD),
         ),
-        Span::raw(" Help  "),
+        Span::raw(" Help "),
         Span::styled(
             "q",
             Style::default()
                 .fg(Color::Cyan)
                 .add_modifier(Modifier::BOLD),
         ),
-        Span::raw(" Quit  "),
+        Span::raw(" Exit  "),
         Span::styled(
             &app.status_msg,
             Style::default().fg(Color::DarkGray),
