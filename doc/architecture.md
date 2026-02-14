@@ -12,17 +12,20 @@ The application uses the `turso` crate, which is a pure Rust implementation of a
 
 ### 2. Application State (`src/app.rs`)
 The `App` struct acts as the central state machine.
-- **In-Memory Caching**: Loads all transcript metadata into memory at startup (~3MB for 13k rows). This ensures that filtering by summary, host, or source link is instantaneous and synchronous.
+- **In-Memory Caching**: Loads all transcript metadata into memory at startup. This ensures that filtering and browsing are instantaneous.
+- **Global Filter System**: Implements a recursive filter engine (AND/OR/NOT) for metadata fields (cost, tokens, model, host) with pre-calculated statistics.
 - **Smart Grouping**: Identifies consecutive entries with identical summaries and automatically collapses them into groups to improve list scannability.
-- **Dynamic Pagination**: While search is in-memory, the UI displays results based on available terminal height (dynamic `page_size`). This ensures maximum use of screen real estate.
-- **Synchronous Filtering**: Manages the live filter string and performs local character-matching, avoiding the overhead of database queries during active typing.
+- **Synchronous Filtering**: Manages the live filter string and performs local character-matching.
+- **Dynamic Statistics**: Computes field distributions (mean, median, MAD) on startup.
 
 ### 3. UI Layer (`src/ui/`)
 Built using `ratatui` with the `crossterm` backend.
 - **Immediate Mode**: The UI is redrawn on every tick (250ms) or event, ensuring a responsive feel.
 - **Custom Widgets**: Utilizes `List`, `Paragraph`, `Tabs`, and `Clear` widgets to build a multi-pane interface.
 - **Layouts**: Uses constraint-based layouts to ensure the app scales properly across various terminal sizes.
-- **Similarity Preview Pane**: The similarity search view features a vertical split with a dedicated preview pane for the currently selected result, reducing navigation steps.
+- **Reusable Preview Pane (`src/ui/preview.rs`)**: A shared component used in both `List` and `Similar` views. It provides a detailed metadata summary, responsive scaling (50% screen vs. fixed height), and **calculated generation duration** using ISO-like timestamp parsing (`%Y-%m-%dT%H:%M:%S%.f`).
+- **Markdown Rendering**: Dedicated rendering paths using the `tui-markdown` crate to ensure summaries are displayed with proper headers, lists, and formatting.
+- **Filter Builder UI (`src/ui/filters.rs`)**: A dedicated view for configuring global filters, featuring statistical distribution reference panes.
 
 ### 4. Maintenance Tools (`tools/`)
 The project includes specialized tools for database preparation and sharing.

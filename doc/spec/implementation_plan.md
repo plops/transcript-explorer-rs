@@ -64,13 +64,22 @@ Table: `items`
 2. **Filtering**: Real-time, synchronous in-memory filtering that updates **after every keystroke**.
 3. **Similarity**: Semantic search using `vector_distance_cos` combined with `vector_slice(..., 0, 768)` to support Matryoshka embeddings.
 4. **Detail**: Multi-pane view for technical summaries and full transcripts.
-5. **Network & Caching**:
+5. **Preview Pane**: A dedicated preview pane available in both the **Main List** and **Similarity View**. It displays:
+   - **Full Summary** with robust markdown rendering via `tui-markdown`.
+   - Accurate **Duration Calculation** for ISO-style database timestamps (`%Y-%m-%dT%H:%M:%S%.f`).
+   - Responsive layout (half-screen if terminal height > 60) and improved text readability.
+6. **Global Filter System**: A robust filtering engine that allows combining multiple criteria:
+   - **Numeric Ranges**: Price, Input Tokens, Output Tokens (with statistical overview: mean, stddev, min, max, median, MAD, 5%/95% percentiles).
+   - **String Matching**: Host, Model (supports wildcards like `*`).
+   - **Boolean Logic**: Combine filters with AND/OR/NOT operations.
+   - **Live Updates**: Filters affect all views and are evaluated in-memory for speed.
+7. **Network & Caching**:
    - **Auto-Download**: Seamlessly downloads the default database if not present.
    - **X-Platform Cache**: Stores persistent data in `~/.cache` (Linux), `Library/Caches` (macOS), or `AppData/Local` (Windows).
    - **CLI Password**: Support for `--password` to enable non-interactive scripting/deployment. Interactive password entry provides **masked feedback (stars)** for better user UX.
-6. **UI Refinements**:
+8. **UI Refinements**:
    - **Title Heuristics**: Skip generic prefixes like "**Abstract:**" when extracting list titles.
-   - **Entry Collapsing**: Automatically collapse consecutive identical entries in both the **Main List** and **Similarity View**, with a toggle to expand (`Space`).
+   - **Entry Collapsing**: Automatically collapse consecutive identical entries, with a toggle to expand (`Space`).
    - **Live Search**: Integrated real-time filtering updates.
 
 ## CI/CD and Automation

@@ -277,11 +277,11 @@ async fn handle_key(app: &mut App, key: KeyEvent) -> Result<(), Box<dyn std::err
         handle_filter_input(app, key).await?;
         return Ok(());
     }
-
     match app.view {
         View::List => handle_list_key(app, key).await?,
         View::Detail => handle_detail_key(app, key).await?,
         View::Similar => handle_similar_key(app, key).await?,
+        View::Filters => handle_filters_key(app, key).await?,
     }
 
     Ok(())
@@ -344,6 +344,9 @@ async fn handle_list_key(app: &mut App, key: KeyEvent) -> Result<(), Box<dyn std
         }
         KeyCode::Char('s') => {
             app.open_similar().await?;
+        }
+        KeyCode::Char('f') => {
+            app.view = View::Filters;
         }
         KeyCode::Char('g') => {
             // Jump to first page
@@ -593,4 +596,104 @@ fn read_password_with_stars() -> Result<String, Box<dyn std::error::Error>> {
 
     disable_raw_mode()?;
     res
+}
+
+async fn handle_filters_key(app: &mut crate::app::App, key: event::KeyEvent) -> Result<(), Box<dyn std::error::Error>> {
+    use crate::app::FilterBuilderState;
+    use crossterm::event::KeyCode;
+
+    match app.filter_builder_state.clone() {
+        FilterBuilderState::Inactive => {
+             match key.code {
+                KeyCode::Esc | KeyCode::Char('q') => {
+                    app.view = crate::app::View::List;
+                }
+                KeyCode::Char('a') => {
+                    app.filter_builder_state = FilterBuilderState::SelectingField;
+                    app.status_msg = "Select field: (c)ost, (i)nput, (o)utput, (m)odel, (h)ost".to_string();
+                }
+                KeyCode::Char('d') => {
+                    app.clear_global_filters();
+                    app.status_msg = "Global filters cleared".to_string();
+                }
+                _ => {}
+            }
+        }
+        FilterBuilderState::SelectingField => {
+            match key.code {
+                KeyCode::Char('c') => {
+                    app.filter_builder_state = FilterBuilderState::EnteringValue { field: "cost".to_string(), step: 0, buffer: String::new(), min_val: 0.0 };
+                    app.status_msg = "Enter MIN cost (default 0):".to_string();
+                }
+                KeyCode::Char('i') => {
+                    app.filter_builder_state = FilterBuilderState::EnteringValue { field: "input_tokens".to_string(), step: 0, buffer: String::new(), min_val: 0.0 };
+                    app.status_msg = "Enter MIN input tokens (default 0):".to_string();
+                }
+                KeyCode::Char('o') => {
+                    app.filter_builder_state = FilterBuilderState::EnteringValue { field: "output_tokens".to_string(), step: 0, buffer: String::new(), min_val: 0.0 };
+                    app.status_msg = "Enter MIN output tokens (default 0):".to_string();
+                }
+                KeyCode::Char('m') => {
+                    app.filter_builder_state = FilterBuilderState::EnteringValue { field: "model".to_string(), step: 0, buffer: String::new(), min_val: 0.0 };
+                    app.status_msg = "Enter model pattern (supports *):".to_string();
+                }
+                KeyCode::Char('h') => {
+                    app.filter_builder_state = FilterBuilderState::EnteringValue { field: "host".to_string(), step: 0, buffer: String::new(), min_val: 0.0 };
+                    app.status_msg = "Enter host pattern (supports *):".to_string();
+                }
+                KeyCode::Esc => {
+                    app.filter_builder_state = FilterBuilderState::Inactive;
+                    app.status_msg = String::new();
+                }
+                _ => {}
+            }
+        }
+        FilterBuilderState::EnteringValue { field, step, mut buffer, min_val } => {
+            match key.code {
+                KeyCode::Enter => {
+                    match field.as_str() {
+                        "cost" | "input_tokens" | "output_tokens" => {
+                            if step == 0 {
+                                let m = buffer.parse::<f64>().unwrap_or(0.0);
+                                app.filter_builder_state = FilterBuilderState::EnteringValue { field: field.clone(), step: 1, buffer: String::new(), min_val: m };
+                                app.status_msg = format!("Min: {}. Enter MAX (default max):", m);
+                            } else {
+                                let max = if buffer.is_empty() {
+                                    app.field_stats.get(&field).map(|s| s.max).unwrap_or(f64::MAX)
+                                } else {
+                                    buffer.parse::<f64>().unwrap_or(f64::MAX)
+                                };
+                                app.add_filter(crate::app::Filter::Range { field: field.clone(), min: min_val, max });
+                                app.filter_builder_state = FilterBuilderState::Inactive;
+                                app.status_msg = format!("Added filter: {} in range [{}, {}]", field, min_val, max);
+                            }
+                        }
+                        "model" | "host" => {
+                            let pattern = if buffer.is_empty() { "*".to_string() } else { buffer };
+                            app.add_filter(crate::app::Filter::Match { field: field.clone(), pattern: pattern.clone() });
+                            app.filter_builder_state = FilterBuilderState::Inactive;
+                            app.status_msg = format!("Added filter: {} matches '{}'", field, pattern);
+                        }
+                        _ => {
+                             app.filter_builder_state = FilterBuilderState::Inactive;
+                        }
+                    }
+                }
+                KeyCode::Backspace => {
+                    buffer.pop();
+                    app.filter_builder_state = FilterBuilderState::EnteringValue { field, step, buffer, min_val };
+                }
+                KeyCode::Char(c) => {
+                    buffer.push(c);
+                    app.filter_builder_state = FilterBuilderState::EnteringValue { field, step, buffer, min_val };
+                }
+                KeyCode::Esc => {
+                    app.filter_builder_state = FilterBuilderState::Inactive;
+                    app.status_msg = String::new();
+                }
+                _ => {}
+            }
+        }
+    }
+    Ok(())
 }

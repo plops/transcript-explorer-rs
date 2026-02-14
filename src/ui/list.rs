@@ -10,13 +10,20 @@ use ratatui::{
 pub fn render(app: &App, frame: &mut Frame) {
     let area = frame.area();
 
-    // Layout: header(3) + filter(3) + list(min) + status(1)
+    let preview_height = if area.height > 60 {
+        Constraint::Percentage(50)
+    } else {
+        Constraint::Length(10)
+    };
+
+    // Layout: header(3) + filter(3) + list(min) + preview(?) + status(1)
     let chunks = Layout::default()
         .direction(Direction::Vertical)
         .constraints([
             Constraint::Length(3),
             Constraint::Length(3),
             Constraint::Min(5),
+            preview_height,
             Constraint::Length(1),
         ])
         .split(area);
@@ -84,7 +91,7 @@ pub fn render(app: &App, frame: &mut Frame) {
 
         let first = &group.items[0];
         let emb_indicator = if first.has_embedding { "●" } else { "○" };
-        let title = app::get_display_title(&first.summary_preview);
+        let title = app::get_display_title(&first.summary);
         
         let mut line_spans = vec![
             Span::styled(
@@ -165,6 +172,17 @@ pub fn render(app: &App, frame: &mut Frame) {
     list_state.select(Some(app.list_selected));
     frame.render_stateful_widget(list_widget, chunks[2], &mut list_state);
 
+    // ── Preview Pane ──
+    if let Some(group) = app.list_items.get(app.list_selected) {
+        if let Some(item) = group.items.first() {
+            super::preview::render_preview(app, frame, chunks[3], item, None);
+        }
+    } else {
+        let empty_preview = Paragraph::new("No result selected")
+            .block(Block::default().borders(Borders::ALL).border_style(Style::default().fg(Color::DarkGray)));
+        frame.render_widget(empty_preview, chunks[3]);
+    }
+
     // ── Status bar ──
     let status_line = Line::from(vec![
         Span::styled(
@@ -182,12 +200,19 @@ pub fn render(app: &App, frame: &mut Frame) {
         ),
         Span::raw(" Expand "),
         Span::styled(
+            "f", // Changed to match implementation plan
+            Style::default()
+                .fg(Color::Cyan)
+                .add_modifier(Modifier::BOLD),
+        ),
+        Span::raw(" Filters "),
+        Span::styled(
             "/",
             Style::default()
                 .fg(Color::Cyan)
                 .add_modifier(Modifier::BOLD),
         ),
-        Span::raw("Filter "),
+        Span::raw("Search "),
         Span::styled(
             "Enter",
             Style::default()
@@ -222,7 +247,7 @@ pub fn render(app: &App, frame: &mut Frame) {
         ),
     ]);
     let status_bar = Paragraph::new(status_line);
-    frame.render_widget(status_bar, chunks[3]);
+    frame.render_widget(status_bar, chunks[4]);
 }
 
 /// Truncate a string to `max_width` characters, adding "…" if truncated.

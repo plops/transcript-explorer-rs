@@ -3,6 +3,7 @@ use turso::Value;
 
 /// A single transcript row from the `items` table.
 #[derive(Debug, Clone)]
+#[allow(dead_code)]
 pub struct TranscriptRow {
     pub identifier: i64,
     pub model: String,
@@ -19,6 +20,8 @@ pub struct TranscriptRow {
     pub cost: f64,
     pub has_embedding: bool,
     pub embedding_model: String,
+    pub summary_timestamp_start: String,
+    pub summary_timestamp_end: String,
 }
 
 /// Lightweight row for list display (avoids loading full transcript text).
@@ -26,11 +29,15 @@ pub struct TranscriptRow {
 pub struct TranscriptListItem {
     pub identifier: i64,
     pub host: String,
-    pub summary_preview: String,
+    pub summary: String,
     pub cost: f64,
     pub has_embedding: bool,
     pub model: String,
-    pub original_source_link: String, // Added to cache for in-memory filtering
+    pub original_source_link: String,
+    pub summary_input_tokens: i64,
+    pub summary_output_tokens: i64,
+    pub summary_timestamp_start: String,
+    pub summary_timestamp_end: String,
 }
 
 /// Result of a vector similarity search.
@@ -38,9 +45,15 @@ pub struct TranscriptListItem {
 pub struct SimilarResult {
     pub identifier: i64,
     pub host: String,
-    pub summary_preview: String,
+    pub summary: String,
     pub distance: f64,
     pub original_source_link: String,
+    pub model: String,
+    pub cost: f64,
+    pub summary_input_tokens: i64,
+    pub summary_output_tokens: i64,
+    pub summary_timestamp_start: String,
+    pub summary_timestamp_end: String,
 }
 
 // ── Value extraction helpers ──
@@ -92,9 +105,11 @@ impl Database {
     pub async fn list_all_transcripts(&self) -> turso::Result<Vec<TranscriptListItem>> {
         let mut items = Vec::new();
         let mut rows = self.conn.query(
-            "SELECT identifier, host, substr(summary, 1, 500), cost, \
+            "SELECT identifier, host, COALESCE(summary, ''), cost, \
              CASE WHEN embedding IS NOT NULL THEN 1 ELSE 0 END, model, \
-             COALESCE(original_source_link, '') \
+             COALESCE(original_source_link, ''), \
+             COALESCE(summary_input_tokens, 0), COALESCE(summary_output_tokens, 0), \
+             COALESCE(summary_timestamp_start, ''), COALESCE(summary_timestamp_end, '') \
              FROM items ORDER BY identifier",
             (),
         ).await?;
@@ -103,11 +118,15 @@ impl Database {
             items.push(TranscriptListItem {
                 identifier: val_i64(&row.get_value(0)?),
                 host: val_string(&row.get_value(1)?),
-                summary_preview: val_string(&row.get_value(2)?),
+                summary: val_string(&row.get_value(2)?),
                 cost: val_f64(&row.get_value(3)?),
                 has_embedding: val_i64(&row.get_value(4)?) == 1,
                 model: val_string(&row.get_value(5)?),
                 original_source_link: val_string(&row.get_value(6)?),
+                summary_input_tokens: val_i64(&row.get_value(7)?),
+                summary_output_tokens: val_i64(&row.get_value(8)?),
+                summary_timestamp_start: val_string(&row.get_value(9)?),
+                summary_timestamp_end: val_string(&row.get_value(10)?),
             });
         }
         Ok(items)
@@ -126,7 +145,8 @@ impl Database {
                  COALESCE(timestamped_summary_in_youtube_format, ''), \
                  COALESCE(cost, 0), \
                  CASE WHEN embedding IS NOT NULL THEN 1 ELSE 0 END, \
-                 COALESCE(embedding_model, '') \
+                 COALESCE(embedding_model, ''), \
+                 COALESCE(summary_timestamp_start, ''), COALESCE(summary_timestamp_end, '') \
                  FROM items WHERE identifier = ?1",
                 turso::params::Params::Positional(vec![Value::Integer(id)]),
             )
@@ -149,6 +169,8 @@ impl Database {
                 cost: val_f64(&row.get_value(12)?),
                 has_embedding: val_i64(&row.get_value(13)?) == 1,
                 embedding_model: val_string(&row.get_value(14)?),
+                summary_timestamp_start: val_string(&row.get_value(15)?),
+                summary_timestamp_end: val_string(&row.get_value(16)?),
             }))
         } else {
             Ok(None)
@@ -169,9 +191,11 @@ impl Database {
         let mut rows = self
             .conn
             .query(
-                "SELECT t.identifier, t.host, substr(t.summary, 1, 500), \
+                "SELECT t.identifier, t.host, COALESCE(t.summary, ''), \
                  vector_distance_cos(vector_slice(t.embedding, 0, 768), vector_slice(s.embedding, 0, 768)) AS dist, \
-                 COALESCE(t.original_source_link, '') \
+                 COALESCE(t.original_source_link, ''), t.model, t.cost, \
+                 COALESCE(t.summary_input_tokens, 0), COALESCE(t.summary_output_tokens, 0), \
+                 COALESCE(t.summary_timestamp_start, ''), COALESCE(t.summary_timestamp_end, '') \
                  FROM items t, (SELECT embedding FROM items WHERE identifier = ?1) s \
                  WHERE t.embedding IS NOT NULL AND t.identifier != ?1 \
                  ORDER BY dist \
@@ -187,9 +211,15 @@ impl Database {
             results.push(SimilarResult {
                 identifier: val_i64(&row.get_value(0)?),
                 host: val_string(&row.get_value(1)?),
-                summary_preview: val_string(&row.get_value(2)?),
+                summary: val_string(&row.get_value(2)?),
                 distance: val_f64(&row.get_value(3)?),
                 original_source_link: val_string(&row.get_value(4)?),
+                model: val_string(&row.get_value(5)?),
+                cost: val_f64(&row.get_value(6)?),
+                summary_input_tokens: val_i64(&row.get_value(7)?),
+                summary_output_tokens: val_i64(&row.get_value(8)?),
+                summary_timestamp_start: val_string(&row.get_value(9)?),
+                summary_timestamp_end: val_string(&row.get_value(10)?),
             });
         }
 

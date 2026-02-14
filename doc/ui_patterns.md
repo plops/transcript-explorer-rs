@@ -28,12 +28,34 @@ Focused on reading.
 ### Similar View
 Focused on discovery.
 - **Color Coding**: Similarity scores are color-coded (Green > 0.9, Yellow > 0.8, Red otherwise) to provide immediate visual feedback on the quality of matches.
+- **Unified Preview**: Uses the same detail pane as the main list to show source links, metadata, and **formatted markdown summaries** (using `tui-markdown`).
+
+### Filters View
+Focused on precision browsing.
+- **Statistical Reference**: Displays mean, median, standard deviation, and percentiles for numeric fields to help users pick valid ranges.
+- **Interactive Builder**: A multi-step state machine guides users through selecting a field, entering min/max values, or match patterns.
+- **Boolean Composition**: Active filters are displayed as a hierarchical tree showing how they are combined (e.g., "ALL OF").
 
 ## Interactive Prompts
 
 Certain actions (like encryption/decryption) require user interaction via standard CLI prompts:
 - **Password Entry**: Implements **masked feedback**. As characters are typed, a `*` is echoed to the terminal. This provides visual confirmation of input without exposing sensitive information.
 - **Input Interaction**: Supports backspace for correction and `Ctrl+C` for graceful cancellation.
+
+## Keybindings Reference
+
+### Global / List
+- `f`: Enter **Filters View**.
+- `/`: Enter search mode.
+- `s`: Find similar items (from selection).
+- `Space`: Expand/collapse group.
+- `Enter`: Open detail view.
+- `q` / `Esc`: Exit or back.
+
+### Filtering (Advanced)
+- `a`: Add new filter.
+- `d`: Delete/Clear all filters.
+- `Esc`: Cancel builder or return to List.
 
 ## Clipboard Support
 

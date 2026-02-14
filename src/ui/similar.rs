@@ -4,19 +4,25 @@ use ratatui::{
     layout::{Alignment, Constraint, Direction, Layout},
     style::{Color, Modifier, Style},
     text::{Line, Span},
-    widgets::{Block, Borders, List, ListItem, ListState, Paragraph, Wrap},
+    widgets::{Block, Borders, List, ListItem, ListState, Paragraph},
 };
 
 pub fn render(app: &App, frame: &mut Frame) {
     let area = frame.area();
 
-    // Layout: header(4) + results(min) + preview(10) + status(1)
+    let preview_height = if area.height > 60 {
+        Constraint::Percentage(50)
+    } else {
+        Constraint::Length(10)
+    };
+
+    // Layout: header(4) + results(min) + preview(?) + status(1)
     let chunks = Layout::default()
         .direction(Direction::Vertical)
         .constraints([
             Constraint::Length(4),
             Constraint::Min(5),
-            Constraint::Length(10),
+            preview_height,
             Constraint::Length(1),
         ])
         .split(area);
@@ -59,8 +65,7 @@ pub fn render(app: &App, frame: &mut Frame) {
 
     // ── Results list ──
     let mut items = Vec::new();
-    let mut selected_result = None;
-
+    let mut _selected_result = None;
     for (i, group) in app.grouped_similar_results.iter().enumerate() {
         if group.items.is_empty() {
             continue;
@@ -68,7 +73,7 @@ pub fn render(app: &App, frame: &mut Frame) {
 
         let result = &group.items[0];
         if i == app.similar_selected {
-            selected_result = Some(result.clone());
+            _selected_result = Some(result.clone());
         }
 
         let similarity = 1.0 - result.distance;
@@ -80,7 +85,7 @@ pub fn render(app: &App, frame: &mut Frame) {
             Color::Red
         };
 
-        let title = app::get_display_title(&result.summary_preview);
+        let title = app::get_display_title(&result.summary);
         
         let mut line_spans = vec![
             Span::styled(
@@ -158,49 +163,25 @@ pub fn render(app: &App, frame: &mut Frame) {
     frame.render_stateful_widget(list_widget, chunks[1], &mut list_state);
 
     // ── Preview Pane ──
-    if let Some(res) = selected_result {
-        let similarity = 1.0 - res.distance;
-        let sim_color = if similarity > 0.90 {
-            Color::Green
-        } else if similarity > 0.80 {
-            Color::Yellow
-        } else {
-            Color::Red
-        };
-
-        let preview_lines = vec![
-            Line::from(vec![
-                Span::styled(" ID: ", Style::default().fg(Color::DarkGray)),
-                Span::styled(res.identifier.to_string(), Style::default().fg(Color::White).add_modifier(Modifier::BOLD)),
-                Span::raw("  "),
-                Span::styled("Host: ", Style::default().fg(Color::DarkGray)),
-                Span::styled(&res.host, Style::default().fg(Color::White)),
-                Span::raw("  "),
-                Span::styled("Similarity: ", Style::default().fg(Color::DarkGray)),
-                Span::styled(format!("{:.1}%", similarity * 100.0), Style::default().fg(sim_color).add_modifier(Modifier::BOLD)),
-            ]),
-            Line::from(vec![
-                Span::styled(" Link: ", Style::default().fg(Color::DarkGray)),
-                Span::styled(&res.original_source_link, Style::default().fg(Color::Blue).add_modifier(Modifier::UNDERLINED)),
-            ]),
-            Line::from(vec![
-                Span::styled(" Summary Preview: ", Style::default().fg(Color::DarkGray)),
-            ]),
-            Line::from(vec![
-                Span::raw(" "),
-                Span::styled(&res.summary_preview, Style::default().fg(Color::White)),
-            ]),
-        ];
-
-        let preview_block = Paragraph::new(preview_lines)
-            .wrap(Wrap { trim: true })
-            .block(
-                Block::default()
-                    .borders(Borders::ALL)
-                    .border_style(Style::default().fg(Color::Cyan))
-                    .title(" Selected Result Preview "),
-            );
-        frame.render_widget(preview_block, chunks[2]);
+    // ── Preview Pane ──
+    if let Some(group) = app.grouped_similar_results.get(app.similar_selected) {
+        if let Some(res) = group.items.first() {
+            // Convert SimilarResult to a pseudo TranscriptListItem for preview
+            let item = crate::db::TranscriptListItem {
+                identifier: res.identifier,
+                host: res.host.clone(),
+                summary: res.summary.clone(),
+                cost: res.cost,
+                has_embedding: true,
+                model: res.model.clone(),
+                original_source_link: res.original_source_link.clone(),
+                summary_input_tokens: res.summary_input_tokens,
+                summary_output_tokens: res.summary_output_tokens,
+                summary_timestamp_start: res.summary_timestamp_start.clone(),
+                summary_timestamp_end: res.summary_timestamp_end.clone(),
+            };
+            super::preview::render_preview(app, frame, chunks[2], &item, Some(res.distance));
+        }
     } else {
          let empty_preview = Paragraph::new("No result selected")
             .block(Block::default().borders(Borders::ALL).border_style(Style::default().fg(Color::DarkGray)));

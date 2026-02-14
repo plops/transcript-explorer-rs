@@ -1,4 +1,6 @@
 use crate::db::{Database, SimilarResult, TranscriptListItem, TranscriptRow};
+use std::collections::HashMap;
+use wildmatch::WildMatch;
 
 /// Which view is currently active.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -6,6 +8,7 @@ pub enum View {
     List,
     Detail,
     Similar,
+    Filters, // Added new view
 }
 
 /// Which tab is selected in the detail view.
@@ -65,6 +68,60 @@ pub struct SimilarGroup {
     pub expanded: bool,
 }
 
+#[derive(Debug, Clone, PartialEq)]
+#[allow(dead_code)]
+pub enum Filter {
+    Range { field: String, min: f64, max: f64 },
+    Match { field: String, pattern: String },
+    And(Vec<Filter>),
+    Or(Vec<Filter>),
+    Not(Box<Filter>),
+}
+
+impl Filter {
+    pub fn matches(&self, item: &TranscriptListItem) -> bool {
+        match self {
+            Filter::Range { field, min, max } => {
+                let val = match field.as_str() {
+                    "cost" => item.cost,
+                    "input_tokens" => item.summary_input_tokens as f64,
+                    "output_tokens" => item.summary_output_tokens as f64,
+                    _ => 0.0,
+                };
+                val >= *min && val <= *max
+            }
+            Filter::Match { field, pattern } => {
+                let val = match field.as_str() {
+                    "model" => &item.model,
+                    "host" => &item.host,
+                    "link" => &item.original_source_link,
+                    _ => "",
+                };
+                // Case-insensitive wildcard match
+                let pattern_low = pattern.to_lowercase();
+                let val_low = val.to_lowercase();
+                WildMatch::new(&pattern_low).matches(&val_low)
+            }
+            Filter::And(filters) => filters.iter().all(|f| f.matches(item)),
+            Filter::Or(filters) => filters.iter().any(|f| f.matches(item)),
+            Filter::Not(filter) => !filter.matches(item),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Default)]
+pub struct Stats {
+    pub count: usize,
+    pub mean: f64,
+    pub stddev: f64,
+    pub min: f64,
+    pub max: f64,
+    pub median: f64,
+    pub mad: f64,
+    pub p5: f64,
+    pub p95: f64,
+}
+
 pub const LIST_OVERHEAD: u16 = 9;
 
 /// Main application state.
@@ -102,8 +159,21 @@ pub struct App {
     pub similar_source_id: i64,
     pub similar_source_preview: String,
 
+    // Global filters state
+    pub global_filter: Option<Filter>,
+    pub field_stats: HashMap<String, Stats>,
+    pub unique_models: Vec<String>,
+    pub filter_builder_state: FilterBuilderState,
+
     // Status message
     pub status_msg: String,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub enum FilterBuilderState {
+    Inactive,
+    SelectingField,
+    EnteringValue { field: String, step: usize, buffer: String, min_val: f64 },
 }
 
 impl App {
@@ -137,15 +207,113 @@ impl App {
             similar_source_preview: String::new(),
 
             status_msg: "Loading database...".to_string(),
+            global_filter: None,
+            field_stats: HashMap::new(),
+            unique_models: Vec::new(),
+            filter_builder_state: FilterBuilderState::Inactive,
         }
     }
 
     /// Initial data load.
     pub async fn init(&mut self) -> turso::Result<()> {
         self.all_items = self.db.list_all_transcripts().await?;
+        self.calculate_all_stats();
+        self.extract_unique_models();
         self.apply_filter();
         self.status_msg = format!("{} transcripts loaded", self.all_items.len());
         Ok(())
+    }
+
+    pub fn extract_unique_models(&mut self) {
+        let mut models: Vec<String> = self.all_items.iter().map(|it| it.model.clone()).collect();
+        models.sort();
+        models.dedup();
+        self.unique_models = models;
+    }
+
+    pub fn calculate_all_stats(&mut self) {
+        let fields = vec!["cost".to_string(), "input_tokens".to_string(), "output_tokens".to_string()];
+        for field in fields {
+            let values: Vec<f64> = self.all_items.iter().map(|it| {
+                match field.as_str() {
+                    "cost" => it.cost,
+                    "input_tokens" => it.summary_input_tokens as f64,
+                    "output_tokens" => it.summary_output_tokens as f64,
+                    _ => 0.0,
+                }
+            }).collect();
+            
+            if !values.is_empty() {
+                self.field_stats.insert(field, self.calculate_stats(values));
+            }
+        }
+    }
+
+    fn calculate_stats(&self, mut values: Vec<f64>) -> Stats {
+        let n = values.len();
+        if n == 0 { return Stats::default(); }
+
+        let sum: f64 = values.iter().sum();
+        let mean = sum / n as f64;
+        
+        let var_sum: f64 = values.iter().map(|&v| (v - mean).powi(2)).sum();
+        let stddev = (var_sum / n as f64).sqrt();
+        
+        values.sort_by(|a, b| a.partial_cmp(b).unwrap());
+        
+        let min = values[0];
+        let max = values[n-1];
+        let median = if n % 2 == 1 {
+            values[n / 2]
+        } else {
+            (values[n / 2 - 1] + values[n / 2]) / 2.0
+        };
+
+        // MAD
+        let mut devs: Vec<f64> = values.iter().map(|&v| (v - median).abs()).collect();
+        devs.sort_by(|a, b| a.partial_cmp(b).unwrap());
+        let mad = if n % 2 == 1 {
+            devs[n / 2]
+        } else {
+            (devs[n / 2 - 1] + devs[n / 2]) / 2.0
+        };
+
+        let p5 = values[(n as f64 * 0.05) as usize];
+        let p95 = values[(n as f64 * 0.95).min(n as f64 - 1.0) as usize];
+
+        Stats {
+            count: n,
+            mean,
+            stddev,
+            min,
+            max,
+            median,
+            mad,
+            p5,
+            p95,
+        }
+    }
+
+    pub fn add_filter(&mut self, filter: Filter) {
+        if let Some(existing) = self.global_filter.take() {
+            match existing {
+                Filter::And(mut filters) => {
+                    filters.push(filter);
+                    self.global_filter = Some(Filter::And(filters));
+                }
+                _ => {
+                    self.global_filter = Some(Filter::And(vec![existing, filter]));
+                }
+            }
+        } else {
+            self.global_filter = Some(filter);
+        }
+        self.apply_filter();
+    }
+
+    pub fn clear_global_filters(&mut self) {
+        self.global_filter = None;
+        self.apply_filter();
     }
 
     /// Update the current page of visible items based on offset.
@@ -273,15 +441,7 @@ impl App {
     }
 
     /// Open detail for a specific identifier (used from similar view).
-    pub async fn open_detail_by_id(&mut self, id: i64) -> turso::Result<()> {
-        if let Some(row) = self.db.get_transcript(id).await? {
-            self.detail = Some(row);
-            self.detail_tab = DetailTab::Summary;
-            self.detail_scroll = 0;
-            self.view = View::Detail;
-        }
-        Ok(())
-    }
+    // Method open_detail_by_id removed as it is unused
 
     /// Open the similar view for the currently viewed/selected transcript.
     pub async fn open_similar(&mut self) -> turso::Result<()> {
@@ -300,7 +460,7 @@ impl App {
                             self.status_msg = "No embedding for this entry".to_string();
                             return Ok(());
                         }
-                        (item.identifier, item.summary_preview.clone())
+                        (item.identifier, item.summary.clone())
                     } else {
                         return Ok(());
                     }
@@ -323,7 +483,7 @@ impl App {
             let mut current_group: Vec<SimilarResult> = Vec::new();
             for item in &self.similar_results {
                 if let Some(last) = current_group.last() {
-                    if last.summary_preview == item.summary_preview {
+                    if last.summary == item.summary {
                         current_group.push(item.clone());
                     } else {
                         self.grouped_similar_results.push(SimilarGroup {
@@ -356,13 +516,29 @@ impl App {
         self.filtered_indices.clear();
         
         if filter.is_empty() {
-            self.filtered_indices = (0..self.all_items.len()).collect();
+            for (i, item) in self.all_items.iter().enumerate() {
+                if let Some(ref gf) = self.global_filter {
+                    if gf.matches(item) {
+                        self.filtered_indices.push(i);
+                    }
+                } else {
+                    self.filtered_indices.push(i);
+                }
+            }
         } else {
             for (i, item) in self.all_items.iter().enumerate() {
-                if item.summary_preview.to_lowercase().contains(&filter) 
+                let matches_text = item.summary.to_lowercase().contains(&filter) 
                    || item.host.to_lowercase().contains(&filter)
-                   || item.original_source_link.to_lowercase().contains(&filter) {
-                    self.filtered_indices.push(i);
+                   || item.original_source_link.to_lowercase().contains(&filter);
+                
+                if matches_text {
+                    if let Some(ref gf) = self.global_filter {
+                        if gf.matches(item) {
+                            self.filtered_indices.push(i);
+                        }
+                    } else {
+                        self.filtered_indices.push(i);
+                    }
                 }
             }
         }
@@ -376,7 +552,7 @@ impl App {
                 let item = &self.all_items[idx];
                 if let Some(last) = current_group.last() {
                     // Group if summary is near-identical (just heuristic)
-                    if last.summary_preview == item.summary_preview {
+                    if last.summary == item.summary {
                         current_group.push(item.clone());
                     } else {
                         self.grouped_items.push(TranscriptGroup {

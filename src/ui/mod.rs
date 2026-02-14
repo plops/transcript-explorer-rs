@@ -1,6 +1,8 @@
 mod list;
 mod detail;
-mod similar;
+pub mod similar;
+pub mod preview;
+pub mod filters;
 mod help;
 
 use crate::app::App;
@@ -12,6 +14,7 @@ pub fn render(app: &App, frame: &mut Frame) {
         crate::app::View::List => list::render(app, frame),
         crate::app::View::Detail => detail::render(app, frame),
         crate::app::View::Similar => similar::render(app, frame),
+        crate::app::View::Filters => filters::render(app, frame),
     }
 
     // Render help overlay on top if active

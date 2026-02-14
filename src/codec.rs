@@ -23,7 +23,7 @@ pub fn encrypt_stream(
     let mut age_writer = encryptor.wrap_output(output_writer)?;
     println!("Encryption Header (Scrypt): {:?}", start_enc.elapsed());
 
-    let start_comp = std::time::Instant::now();
+    let _start_comp = std::time::Instant::now();
     
     let mut params = BrotliEncoderParams::default();
     params.quality = quality as i32;
@@ -63,10 +63,10 @@ pub fn decrypt_stream(
     };
 
     let max_work_factor = if cfg!(debug_assertions) { Some(22) } else { None };
-    let mut reader = decryptor.decrypt(&password, max_work_factor)?;
+    let reader = decryptor.decrypt(&password, max_work_factor)?;
     println!("Decryption Init: {:?}", start_dec.elapsed());
     
-    let start_decomp = std::time::Instant::now();
+    let _start_decomp = std::time::Instant::now();
     
     // Use brotli::Decompressor which handles concatenated streams automatically
     let mut decompressor = brotli::Decompressor::new(reader, BUFFER_SIZE);
