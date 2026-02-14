@@ -63,3 +63,12 @@ Table: `items`
    - **Title Heuristics**: Skip generic prefixes like "**Abstract:**" when extracting list titles.
    - **Entry Collapsing**: Automatically collapse consecutive identical entries in both the **Main List** and **Similarity View**, with a toggle to expand (`Space`).
    - **Live Search**: Integrated real-time filtering updates.
+
+## CI/CD and Automation
+
+- **GitHub Actions**: Automated release pipeline triggered on version tags (`v*`).
+- **Cross-Platform Support**: Automated builds for:
+  - Linux (x86_64-unknown-linux-gnu)
+  - macOS (x86_64-apple-darwin, aarch64-apple-darwin)
+  - Windows (x86_64-pc-windows-msvc)
+- **Releases**: Assets (.tar.gz and .zip) automatically attached to GitHub Releases.
