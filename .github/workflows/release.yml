@@ -9,6 +9,8 @@ jobs:
   build-and-release:
     name: Build and Release
     runs-on: ${{ matrix.os }}
+    permissions:
+      contents: write
     strategy:
       matrix:
         include:
@@ -47,18 +49,16 @@ jobs:
       - name: Prepare assets
         shell: bash
         run: |
-          cd target/${{ matrix.target }}/release
           if [ "${{ matrix.os }}" = "windows-latest" ]; then
-            zip "../../${{ matrix.asset_name }}.zip" "${{ matrix.artifact_name }}"
+            powershell -Command "Compress-Archive -Path target/${{ matrix.target }}/release/${{ matrix.artifact_name }} -DestinationPath ${{ matrix.asset_name }}.zip"
           else
-            tar czf "../../${{ matrix.asset_name }}.tar.gz" "${{ matrix.artifact_name }}"
+            tar czf "${{ matrix.asset_name }}.tar.gz" -C target/${{ matrix.target }}/release "${{ matrix.artifact_name }}"
           fi
 
       - name: Upload assets to release
         uses: softprops/action-gh-release@v2
         if: startsWith(github.ref, 'refs/tags/')
         with:
-          files: |
-            ${{ matrix.asset_name }}.*
+          files: ${{ matrix.asset_name }}.*
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
