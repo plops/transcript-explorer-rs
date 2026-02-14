@@ -1,0 +1,19 @@
+[package]
+name = "transcript-explorer"
+version = "0.1.0"
+edition = "2024"
+description = "TUI explorer for YouTube transcript summaries stored in SQLite"
+
+[dependencies]
+turso = "0.4"
+tokio = { version = "1", features = ["full"] }
+ratatui = "0.30"
+crossterm = "0.29"
+clap = { version = "4", features = ["derive"] }
+unicode-width = "0.2"
+
+[profile.release]
+opt-level = "z"
+lto = true
+strip = true
+codegen-units = 1
