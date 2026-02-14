@@ -14,7 +14,7 @@ The application uses the `turso` crate, which is a pure Rust implementation of a
 The `App` struct acts as the central state machine.
 - **In-Memory Caching**: Loads all transcript metadata into memory at startup (~3MB for 13k rows). This ensures that filtering by summary, host, or source link is instantaneous and synchronous.
 - **Smart Grouping**: Identifies consecutive entries with identical summaries and automatically collapses them into groups to improve list scannability.
-- **Pagination**: While search is in-memory, the UI still displays results in pages of 50 groups for visual clarity and scrolling performance.
+- **Dynamic Pagination**: While search is in-memory, the UI displays results based on available terminal height (dynamic `page_size`). This ensures maximum use of screen real estate.
 - **Synchronous Filtering**: Manages the live filter string and performs local character-matching, avoiding the overhead of database queries during active typing.
 
 ### 3. UI Layer (`src/ui/`)

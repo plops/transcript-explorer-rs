@@ -27,3 +27,8 @@
 - [x] Implement title heuristic (skip "Abstract:", etc.)
 - [x] Implement collapsing of consecutive duplicates
 - [x] Add toggle for uncollapsing groups
+
+## Phase 5: Dynamic Scaling & Optimization
+- [x] Implement dynamic `page_size` based on terminal window height
+- [x] Implement `Resize` event handling to update layout on-the-fly
+- [x] Update documentation to reflect dynamic TUI behavior

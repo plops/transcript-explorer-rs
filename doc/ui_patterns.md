@@ -5,7 +5,7 @@ This document describes the user interface design philosophy and interactive pat
 ## Interface Design
 
 The UI is divided into several areas using a hierarchical layout:
-- **Navigation Layout**: The top level typically has a header, a main content area, and a status/instruction bar at the bottom.
+- **Navigation Layout**: The top level typically has a header, a main content area, and a status/instruction bar at the bottom. Layouts automatically scale vertically to utilize the full terminal height.
 - **Filtering**: Type-to-search is implemented as a semi-modal state (`InputMode::Editing`). When active, the cursor is focused in the search bar.
 - **Detail View Architecture**: Metadata is kept in a fixed-size top block, while the content (Summary/Transcript/Timestamps) uses a scrollable paragraph that can be toggled via tabs.
 - **Smart Grouping**: Consecutive items with identical summaries are collapsed into a single group to reduce noise. These groups show a `[+N]` counter and can be expanded using the `Space` key.

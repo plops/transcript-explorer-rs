@@ -36,6 +36,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Init terminal
     let mut terminal = ratatui::init();
 
+    // Initial page size setup
+    let size = terminal.size()?;
+    app.update_page_size(size.height);
+
     // Main loop
     let result = run_app(&mut terminal, &mut app).await;
 
@@ -63,11 +67,17 @@ async fn run_app(
 
         // Poll for events with a 250ms timeout
         if crossterm::event::poll(std::time::Duration::from_millis(250))? {
-            if let Event::Key(key) = event::read()? {
-                if key.kind != KeyEventKind::Press {
-                    continue;
+            match event::read()? {
+                Event::Key(key) => {
+                    if key.kind != KeyEventKind::Press {
+                        continue;
+                    }
+                    handle_key(app, key).await?;
                 }
-                handle_key(app, key).await?;
+                Event::Resize(_, height) => {
+                    app.update_page_size(height);
+                }
+                _ => {}
             }
         }
     }

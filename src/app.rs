@@ -65,6 +65,8 @@ pub struct SimilarGroup {
     pub expanded: bool,
 }
 
+pub const LIST_OVERHEAD: u16 = 9;
+
 /// Main application state.
 pub struct App {
     pub db: Database,
@@ -119,7 +121,7 @@ impl App {
             list_items: Vec::new(),
             list_selected: 0,
             list_offset: 0,
-            page_size: 50, // Groups can be large, so smaller page size
+            page_size: 20, // Initial default, will be updated on first render/resize
 
             filter: String::new(),
             input_mode: InputMode::Normal,
@@ -151,6 +153,13 @@ impl App {
         let start = self.list_offset;
         let end = (start + self.page_size).min(self.grouped_items.len());
         self.list_items = self.grouped_items[start..end].to_vec();
+    }
+
+    /// Update page size based on terminal height.
+    pub fn update_page_size(&mut self, terminal_height: u16) {
+        let new_size = terminal_height.saturating_sub(LIST_OVERHEAD) as usize;
+        self.page_size = new_size.max(1);
+        self.update_list_page();
     }
 
     /// Move selection down in the list.

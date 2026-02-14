@@ -55,7 +55,7 @@ Table: `items`
 
 ## Navigation & Workflows
 
-1. **Browsing**: Scroll through all entries. In-memory metadata caching ensures high responsiveness. Includes **PageUp/Down** support.
+1. **Browsing**: Scroll through all entries. In-memory metadata caching ensures high responsiveness. Features dynamic vertical scaling (adaptive `page_size`) and **PageUp/Down** support.
 2. **Filtering**: Real-time, synchronous in-memory filtering that updates **after every keystroke**.
 3. **Similarity**: Semantic search using `vector_distance_cos` combined with `vector_slice(..., 0, 768)` to support Matryoshka embeddings.
 4. **Detail**: Multi-pane view for technical summaries and full transcripts.
