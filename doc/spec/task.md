@@ -46,5 +46,10 @@
 - [x] Verify round-trip encryption/decryption
 
 ## Phase 8: Performance Optimization
-- [x] Implement multithreaded compression with `rayon`
+- [x] Implement multithreaded compression (initial implementation)
 - [x] Add performance metrics to CLI output
+
+## Phase 9: Reliability & Robustness
+- [x] Switch to single-stream Brotli processing for maximum compatibility
+- [x] Fix database panic caused by multi-stream data loss
+- [x] Remove `rayon` dependency to simplify the codebase

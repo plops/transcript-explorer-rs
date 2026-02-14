@@ -57,13 +57,12 @@ transcript-explorer --db data/summaries.db.age
 
 ## Technical Details
 
-- **Streamed Processing**: Encryption and decryption are streamed to minimize memory usage, though compression buffers chunks in memory.
-- **Parallel Compression**: Uses `rayon` to compress 1MB chunks in parallel. Each chunk is an independent Brotli stream, concatenated to form the final file. This saturates available CPU cores.
+- **Streamed Processing**: Encryption and decryption use a single-stream approach for maximum reliability and lower memory overhead.
+- **Robustness**: Uses a single Brotli stream per file to avoid data loss issues sometimes associated with multi-stream concatenation in custom decompressors.
 - **Critical Build Configuration**: Encryption performance relies heavily on compiler optimizations. The `release` profile must use `opt-level = 3` (speed) rather than `z` (size) to achieve >1GB/s throughput.
 - **Performance Metrics**: The CLI outputs detailed timing logs to stdout, measuring:
     - Input read time
-    - Compression time (parallel)
-    - Encryption/Decryption time
+    - Compression & Encryption time
     - Total elapsed time
 - **Algorithm**: 
     - **Compression**: Brotli (Default Quality 6, Window 20). Configurable via `--fast` (Quality 1) or `--best` (Quality 11).

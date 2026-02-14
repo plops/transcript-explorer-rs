@@ -16,7 +16,6 @@ age = "0.10"
 brotli = "8"
 rpassword = "7"
 tempfile = "3"
-rayon = "1.11"
 
 [profile.release]
 opt-level = 3

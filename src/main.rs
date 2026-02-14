@@ -138,6 +138,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 let password = rpassword::read_password()?;
                 
                 eprintln!("Decrypting to temporary file...");
+                eprintln!("Decrypting to temporary file...");
                 let temp = tempfile::NamedTempFile::new()?;
                 codec::decrypt_stream(&db, temp.path(), Secret::new(password))?;
                 
