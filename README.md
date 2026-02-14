@@ -2,7 +2,13 @@
 
 A cross-platform Rust Terminal User Interface (TUI) for browsing, searching, and exploring YouTube transcript summaries stored in a SQLite database.
 
-![Transcript Explorer](https://placeholder-image-url.com/explorer.png) _(Replace with actual screenshot if available)_
+### Main View
+![Main Explorer View](screenshot/1.png)
+*Filtering thousands of transcript summaries with sub-millisecond responsiveness.*
+
+### Similarity Search
+![Vector Similarity View](screenshot/2.png)
+*Discovering related content using semantic vector similarity directly in SQL.*
 
 ## Features
 
