@@ -62,6 +62,7 @@ Run the binary by providing the path to your `summaries.db` file:
 - [UI Patterns](doc/ui_patterns.md)
 - [Database Maintenance & Tools](doc/database_maintenance.md)
 - [Release Process](doc/release_process.md)
+- [Encryption & Compression](doc/encryption_compression.md)
 - [Specification & Research](doc/spec/)
 
 ## License

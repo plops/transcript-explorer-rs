@@ -1,8 +1,9 @@
 [package]
 name = "transcript-explorer"
-version = "1.0.1"
+version = "1.1.0"
 edition = "2024"
 description = "TUI explorer for YouTube transcript summaries stored in SQLite"
+
 
 [dependencies]
 turso = "0.4"
@@ -11,6 +12,11 @@ ratatui = "0.30"
 crossterm = "0.29"
 clap = { version = "4", features = ["derive"] }
 unicode-width = "0.2"
+age = "0.10"
+brotli = "6"
+rpassword = "7"
+tempfile = "3"
+rayon = "1.10"
 
 [profile.release]
 opt-level = "z"

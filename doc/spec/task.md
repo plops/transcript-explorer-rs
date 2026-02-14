@@ -32,3 +32,16 @@
 - [x] Implement dynamic `page_size` based on terminal window height
 - [x] Implement `Resize` event handling to update layout on-the-fly
 - [x] Update documentation to reflect dynamic TUI behavior
+
+## Phase 6: Database Preparation & Maintenance Tools
+- [x] Initialize `tools/` directory with `astral uv` project
+- [x] Implement `cleanup_db.py` to strip transcripts and large text
+- [x] Implement embedding truncation to 768 dimensions (Matryoshka optimization)
+- [x] Add filtering for error entries in summaries
+- [x] Add `doc/database_maintenance.md` and reference in root `README.md`
+
+## Phase 7: Compression and Encryption
+- [x] Integrate `age` for encryption and `brotli` for compression
+- [x] Add CLI subcommands (`encrypt`, `decrypt`, `run`)
+- [x] Implement transparent loading of encrypted databases via temporary file
+- [x] Verify round-trip encryption/decryption

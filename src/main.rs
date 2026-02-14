@@ -1,54 +1,177 @@
 mod app;
+mod codec;
 mod db;
 mod ui;
 
 use app::{App, DetailTab, InputMode, View};
-use clap::Parser;
+use clap::{Parser, Subcommand};
 use crossterm::event::{self, Event, KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
+use age::secrecy::Secret;
 
 /// TUI explorer for YouTube transcript summaries stored in SQLite
 #[derive(Parser)]
 #[command(version, about)]
 struct Cli {
-    /// Path to the SQLite database file
+    #[command(subcommand)]
+    command: Option<Commands>,
+
+    /// Path to the SQLite database file (deprecated/fallback if no subcommand)
     #[arg(short, long)]
-    db: PathBuf,
+    db: Option<PathBuf>,
+}
+
+#[derive(Subcommand)]
+enum Commands {
+    /// Run the TUI explorer (default)
+    Run {
+        /// Path to the SQLite database file
+        #[arg(short, long)]
+        db: PathBuf,
+    },
+    /// Compress and encrypt a database file
+    Encrypt {
+        /// Input database file
+        #[arg(short, long)]
+        input: PathBuf,
+        /// Output encrypted file
+        #[arg(short, long)]
+        output: PathBuf,
+        /// Fast compression (quality 1) works best for speed
+        #[arg(long, conflicts_with = "best")]
+        fast: bool,
+        /// Best compression (quality 11) works best for size but is slow
+        #[arg(long, conflicts_with = "fast")]
+        best: bool,
+    },
+    /// Decrypt and decompress a database file
+    Decrypt {
+        /// Input encrypted file
+        #[arg(short, long)]
+        input: PathBuf,
+        /// Output database file
+        #[arg(short, long)]
+        output: PathBuf,
+    },
 }
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let cli = Cli::parse();
+    
+    // Normalize command
+    let command = match cli.command {
+        Some(c) => c,
+        None => {
+            if let Some(db_path) = cli.db {
+                Commands::Run { db: db_path }
+            } else {
+                use clap::CommandFactory;
+                Cli::command().print_help()?;
+                return Ok(());
+            }
+        }
+    };
 
-    // Verify DB file exists
-    if !cli.db.exists() {
-        eprintln!("Error: database file not found: {}", cli.db.display());
-        std::process::exit(1);
-    }
+    match command {
+        Commands::Encrypt { input, output, fast, best } => {
+            if !input.exists() {
+                eprintln!("Error: input file not found: {}", input.display());
+                std::process::exit(1);
+            }
+            
+            let quality = if fast {
+                1
+            } else if best {
+                11
+            } else {
+                6 // Default
+            };
 
-    // Open database
-    let database = db::Database::open(&cli.db).await?;
+            eprint!("Enter password: ");
+            let password = rpassword::read_password()?;
+            eprintln!("Encrypting {} -> {} (quality: {})...", input.display(), output.display(), quality);
+            codec::encrypt_stream(&input, &output, Secret::new(password), quality)?;
+            eprintln!("Done.");
+        }
+        Commands::Decrypt { input, output } => {
+            if !input.exists() {
+                eprintln!("Error: input file not found: {}", input.display());
+                std::process::exit(1);
+            }
+            eprint!("Enter password: ");
+            let password = rpassword::read_password()?;
+            eprintln!("Decrypting {} -> {} ...", input.display(), output.display());
+            codec::decrypt_stream(&input, &output, Secret::new(password))?;
+            eprintln!("Done.");
+        }
+        Commands::Run { db } => {
+             // Verify DB file exists
+            if !db.exists() {
+                eprintln!("Error: database file not found: {}", db.display());
+                std::process::exit(1);
+            }
 
-    // Create app
-    let mut app = App::new(database);
-    app.init().await?;
+            // Check if it's potentially encrypted (basic check or user invoked)
+            // We assume if it fails to open as SQLite or has extension .age, we try to decrypt?
+            // Or we just try to read the header.
+            // For now, let's look for known extensions or just try to open it as SQLite first?
+            // Actually, we can just check the header bytes. SQLite header is "SQLite format 3\0".
+            // Age header is "age-encryption.org".
+            
+            let mut is_encrypted = false;
+            if let Ok(mut file) = std::fs::File::open(&db) {
+                use std::io::Read;
+                let mut buffer = [0u8; 18]; // "age-encryption.org" length
+                if file.read_exact(&mut buffer).is_ok() {
+                     if &buffer == b"age-encryption.org" {
+                         is_encrypted = true;
+                     }
+                }
+            }
+            
+            let _temp_file; // Keep alive until function end
+            
+            let target_db_path = if is_encrypted {
+                eprintln!("Detected encrypted database.");
+                eprint!("Enter password: ");
+                let password = rpassword::read_password()?;
+                
+                eprintln!("Decrypting to temporary file...");
+                let temp = tempfile::NamedTempFile::new()?;
+                codec::decrypt_stream(&db, temp.path(), Secret::new(password))?;
+                
+                _temp_file = temp; // extend lifetime
+                _temp_file.path().to_path_buf()
+            } else {
+                db
+            };
 
-    // Init terminal
-    let mut terminal = ratatui::init();
+            // Open database
+            let database = db::Database::open(&target_db_path).await?;
 
-    // Initial page size setup
-    let size = terminal.size()?;
-    app.update_page_size(size.height);
+            // Create app
+            let mut app = App::new(database);
+            app.init().await?;
 
-    // Main loop
-    let result = run_app(&mut terminal, &mut app).await;
+            // Init terminal
+            let mut terminal = ratatui::init();
 
-    // Restore terminal
-    ratatui::restore();
+            // Initial page size setup
+            let size = terminal.size()?;
+            app.update_page_size(size.height);
 
-    if let Err(e) = result {
-        eprintln!("Error: {e}");
-        std::process::exit(1);
+            // Main loop
+            let result = run_app(&mut terminal, &mut app).await;
+
+            // Restore terminal
+            ratatui::restore();
+
+            if let Err(e) = result {
+                eprintln!("Error: {e}");
+                std::process::exit(1);
+            }
+        }
     }
 
     Ok(())

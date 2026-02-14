@@ -10,7 +10,9 @@ A cross-platform Rust TUI application for browsing, searching, and exploring ~12
 | TUI Framework | **`ratatui`** + **`crossterm`** backend | De-facto Rust TUI standard; crossterm provides cross-platform terminal I/O |
 | Async Runtime | **`tokio`** | Required by `turso` crate; also drives event loop |
 | Vector Search | Turso built-in `vector_distance_cos()` | Cosine similarity over the `embedding` blobs already in the DB |
-| CLI Args | **`clap`** (derive) | Accept DB file path, version info |
+| CLI Args | **`clap`** (derive) | Accept DB file path, version info, and subcommands |
+| Compression | **`brotli`** | High compression ratio for text-heavy database |
+| Encryption | **`age`** | Modern, secure encryption with simple key management |
 
 ## Database Schema (read-only)
 
