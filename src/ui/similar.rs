@@ -1,4 +1,4 @@
-use crate::app::App;
+use crate::app::{self, App};
 use ratatui::{
     Frame,
     layout::{Alignment, Constraint, Direction, Layout},
@@ -21,10 +21,12 @@ pub fn render(app: &App, frame: &mut Frame) {
         .split(area);
 
     // ── Header ──
-    let source_preview = super::list::truncate_str(
-        &app.similar_source_preview,
+    let source_preview = app::get_display_title(&app.similar_source_preview);
+    let source_preview_truncated = super::list::truncate_str(
+        &source_preview,
         (area.width as usize).saturating_sub(25),
     );
+    
     let header_lines = vec![
         Line::from(vec![
             Span::styled(
@@ -41,7 +43,7 @@ pub fn render(app: &App, frame: &mut Frame) {
         Line::from(vec![
             Span::styled(" ", Style::default()),
             Span::styled(
-                source_preview,
+                source_preview_truncated,
                 Style::default().fg(Color::Cyan),
             ),
         ]),
@@ -55,49 +57,79 @@ pub fn render(app: &App, frame: &mut Frame) {
     frame.render_widget(header, chunks[0]);
 
     // ── Results list ──
-    let items: Vec<ListItem> = app
-        .similar_results
-        .iter()
-        .enumerate()
-        .map(|(i, result)| {
-            let preview = result
-                .summary_preview
-                .lines()
-                .next()
-                .unwrap_or("")
-                .trim();
-            let similarity = 1.0 - result.distance; // Convert distance to similarity
-            let sim_color = if similarity > 0.90 {
-                Color::Green
-            } else if similarity > 0.80 {
-                Color::Yellow
-            } else {
-                Color::Red
-            };
+    let mut items = Vec::new();
+    for (i, group) in app.grouped_similar_results.iter().enumerate() {
+        if group.items.is_empty() {
+            continue;
+        }
 
-            let line = Line::from(vec![
-                Span::styled(
-                    format!(" {:>2}. ", i + 1),
-                    Style::default().fg(Color::DarkGray),
-                ),
-                Span::styled(
-                    format!("{:.3} ", similarity),
-                    Style::default().fg(sim_color).add_modifier(Modifier::BOLD),
-                ),
-                Span::styled(
-                    format!("{:>5} ", result.identifier),
-                    Style::default().fg(Color::DarkGray),
-                ),
-                Span::raw(super::list::truncate_str(
-                    preview,
-                    (area.width as usize).saturating_sub(25),
-                )),
-            ]);
-            ListItem::new(line)
-        })
-        .collect();
+        let result = &group.items[0];
+        let similarity = 1.0 - result.distance;
+        let sim_color = if similarity > 0.90 {
+            Color::Green
+        } else if similarity > 0.80 {
+            Color::Yellow
+        } else {
+            Color::Red
+        };
 
-    let result_count = format!(" {} results ", app.similar_results.len());
+        let title = app::get_display_title(&result.summary_preview);
+        
+        let mut line_spans = vec![
+            Span::styled(
+                format!(" {:>2}. ", i + 1),
+                Style::default().fg(Color::DarkGray),
+            ),
+            Span::styled(
+                format!("{:.3} ", similarity),
+                Style::default().fg(sim_color).add_modifier(Modifier::BOLD),
+            ),
+            Span::styled(
+                format!("{:>5} ", result.identifier),
+                Style::default().fg(Color::DarkGray),
+            ),
+        ];
+
+        if !group.expanded && group.items.len() > 1 {
+            line_spans.push(Span::styled(
+                format!("[+{}] ", group.items.len() - 1),
+                Style::default().fg(Color::Magenta).add_modifier(Modifier::BOLD),
+            ));
+        } else if group.expanded {
+            line_spans.push(Span::styled(
+                "[-] ",
+                Style::default().fg(Color::Magenta).add_modifier(Modifier::BOLD),
+            ));
+        }
+
+        line_spans.push(Span::raw(super::list::truncate_str(
+            &title,
+            (area.width as usize).saturating_sub(40),
+        )));
+        
+        items.push(ListItem::new(Line::from(line_spans)));
+
+        if group.expanded {
+            for sub_item in group.items.iter().skip(1) {
+                let sub_similarity = 1.0 - sub_item.distance;
+                let sub_line = Line::from(vec![
+                    Span::raw("        "), // padding
+                    Span::styled(
+                        format!("{:.3} ", sub_similarity),
+                        Style::default().fg(Color::DarkGray),
+                    ),
+                    Span::styled(
+                        format!("⤷ {:>5} ", sub_item.identifier),
+                        Style::default().fg(Color::DarkGray),
+                    ),
+                    Span::raw(" (duplicate summary)"),
+                ]);
+                items.push(ListItem::new(sub_line));
+            }
+        }
+    }
+
+    let result_count = format!(" {} groups ({} total results) ", app.grouped_similar_results.len(), app.similar_results.len());
     let list_widget = List::new(items)
         .block(
             Block::default()
@@ -127,6 +159,13 @@ pub fn render(app: &App, frame: &mut Frame) {
                 .add_modifier(Modifier::BOLD),
         ),
         Span::raw(" Navigate  "),
+        Span::styled(
+            "Space",
+            Style::default()
+                .fg(Color::Cyan)
+                .add_modifier(Modifier::BOLD),
+        ),
+        Span::raw(" Expand  "),
         Span::styled(
             "Enter",
             Style::default()

@@ -58,6 +58,13 @@ pub struct TranscriptGroup {
     pub expanded: bool,
 }
 
+/// A group of consecutive identical similarity results.
+#[derive(Debug, Clone)]
+pub struct SimilarGroup {
+    pub items: Vec<SimilarResult>,
+    pub expanded: bool,
+}
+
 /// Main application state.
 pub struct App {
     pub db: Database,
@@ -88,6 +95,7 @@ pub struct App {
 
     // Similar view state
     pub similar_results: Vec<SimilarResult>,
+    pub grouped_similar_results: Vec<SimilarGroup>,
     pub similar_selected: usize,
     pub similar_source_id: i64,
     pub similar_source_preview: String,
@@ -121,6 +129,7 @@ impl App {
             detail_scroll: 0,
 
             similar_results: Vec::new(),
+            grouped_similar_results: Vec::new(),
             similar_selected: 0,
             similar_source_id: 0,
             similar_source_preview: String::new(),
@@ -201,28 +210,56 @@ impl App {
 
     /// Open the detail view for the currently selected item.
     pub async fn open_detail(&mut self) -> turso::Result<()> {
-        if let Some(group) = self.list_items.get(self.list_selected) {
-            if let Some(item) = group.items.first() {
-                let id = item.identifier;
-                if let Some(row) = self.db.get_transcript(id).await? {
-                    self.detail = Some(row);
-                    self.detail_tab = DetailTab::Summary;
-                    self.detail_scroll = 0;
-                    self.view = View::Detail;
+        match self.view {
+            View::List => {
+                if let Some(group) = self.list_items.get(self.list_selected) {
+                    if let Some(item) = group.items.first() {
+                        let id = item.identifier;
+                        if let Some(row) = self.db.get_transcript(id).await? {
+                            self.detail = Some(row);
+                            self.detail_tab = DetailTab::Summary;
+                            self.detail_scroll = 0;
+                            self.view = View::Detail;
+                        }
+                    }
                 }
             }
+            View::Similar => {
+                if let Some(group) = self.grouped_similar_results.get(self.similar_selected) {
+                    if let Some(item) = group.items.first() {
+                        let id = item.identifier;
+                        if let Some(row) = self.db.get_transcript(id).await? {
+                            self.detail = Some(row);
+                            self.detail_tab = DetailTab::Summary;
+                            self.detail_scroll = 0;
+                            self.view = View::Detail;
+                        }
+                    }
+                }
+            }
+            _ => {}
         }
         Ok(())
     }
 
     /// Toggle expansion of the currently selected group.
     pub fn toggle_expand(&mut self) {
-        if let Some(group) = self.list_items.get_mut(self.list_selected) {
-            group.expanded = !group.expanded;
-            // Sync back to grouped_items
-            if let Some(g) = self.grouped_items.get_mut(self.list_offset + self.list_selected) {
-                g.expanded = group.expanded;
+        match self.view {
+            View::List => {
+                if let Some(group) = self.list_items.get_mut(self.list_selected) {
+                    group.expanded = !group.expanded;
+                    // Sync back to grouped_items
+                    if let Some(g) = self.grouped_items.get_mut(self.list_offset + self.list_selected) {
+                        g.expanded = group.expanded;
+                    }
+                }
             }
+            View::Similar => {
+                if let Some(group) = self.grouped_similar_results.get_mut(self.similar_selected) {
+                    group.expanded = !group.expanded;
+                }
+            }
+            _ => {}
         }
     }
 
@@ -271,9 +308,36 @@ impl App {
         
         self.similar_results = self.db.find_similar(id, 20).await?;
         
+        // Grouping logic for similarity results
+        self.grouped_similar_results.clear();
+        if !self.similar_results.is_empty() {
+            let mut current_group: Vec<SimilarResult> = Vec::new();
+            for item in &self.similar_results {
+                if let Some(last) = current_group.last() {
+                    if last.summary_preview == item.summary_preview {
+                        current_group.push(item.clone());
+                    } else {
+                        self.grouped_similar_results.push(SimilarGroup {
+                            items: current_group,
+                            expanded: false,
+                        });
+                        current_group = vec![item.clone()];
+                    }
+                } else {
+                    current_group.push(item.clone());
+                }
+            }
+            if !current_group.is_empty() {
+                self.grouped_similar_results.push(SimilarGroup {
+                    items: current_group,
+                    expanded: false,
+                });
+            }
+        }
+        
         self.similar_selected = 0;
         self.view = View::Similar;
-        self.status_msg = format!("Found {} similar transcripts", self.similar_results.len());
+        self.status_msg = format!("Found {} similar transcripts ({} groups)", self.similar_results.len(), self.grouped_similar_results.len());
         Ok(())
     }
 

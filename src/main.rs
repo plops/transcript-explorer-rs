@@ -282,8 +282,8 @@ async fn handle_similar_key(
             app.view = View::List;
         }
         KeyCode::Down | KeyCode::Char('j') => {
-            if !app.similar_results.is_empty()
-                && app.similar_selected + 1 < app.similar_results.len()
+            if !app.grouped_similar_results.is_empty()
+                && app.similar_selected + 1 < app.grouped_similar_results.len()
             {
                 app.similar_selected += 1;
             }
@@ -293,11 +293,11 @@ async fn handle_similar_key(
                 app.similar_selected -= 1;
             }
         }
+        KeyCode::Char(' ') => {
+            app.toggle_expand();
+        }
         KeyCode::Enter => {
-            if let Some(result) = app.similar_results.get(app.similar_selected) {
-                let id = result.identifier;
-                app.open_detail_by_id(id).await?;
-            }
+            app.open_detail().await?;
         }
         _ => {}
     }

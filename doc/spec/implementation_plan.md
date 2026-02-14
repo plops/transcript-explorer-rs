@@ -61,4 +61,5 @@ Table: `items`
 4. **Detail**: Multi-pane view for technical summaries and full transcripts.
 5. **UI Refinements**:
    - **Title Heuristics**: Skip generic prefixes like "**Abstract:**" when extracting list titles.
-   - **Entry Collapsing**: Automatically collapse consecutive identical entries, with a toggle to expand.
+   - **Entry Collapsing**: Automatically collapse consecutive identical entries in both the **Main List** and **Similarity View**, with a toggle to expand (`Space`).
+   - **Live Search**: Integrated real-time filtering updates.
