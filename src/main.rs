@@ -11,6 +11,7 @@ use age::secrecy::Secret;
 use futures_util::StreamExt;
 use indicatif::{ProgressBar, ProgressStyle};
 use std::io::Write;
+use crossterm::terminal::{disable_raw_mode, enable_raw_mode};
 
 /// TUI explorer for YouTube transcript summaries stored in SQLite
 #[derive(Parser)]
@@ -106,7 +107,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 p.clone()
             } else {
                 eprint!("Enter password: ");
-                rpassword::read_password()?
+                read_password_with_stars()?
             };
             eprintln!("Encrypting {} -> {} (quality: {})...", input.display(), output.display(), quality);
             codec::encrypt_stream(&input, &output, Secret::new(password), quality)?;
@@ -123,7 +124,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 p.clone()
             } else {
                 eprint!("Enter password: ");
-                rpassword::read_password()?
+                read_password_with_stars()?
             };
             eprintln!("Decrypting {} -> {} ...", input.display(), output.display());
             codec::decrypt_stream(&input, &output, Secret::new(password))?;
@@ -180,7 +181,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     p
                 } else {
                     eprint!("Enter password: ");
-                    rpassword::read_password()?
+                    read_password_with_stars()?
                 };
                 
                 eprintln!("Decrypting to temporary file...");
@@ -550,4 +551,46 @@ async fn download_db(url: &str, output: &Path) -> Result<(), Box<dyn std::error:
 
     pb.finish_with_message("Download complete");
     Ok(())
+}
+
+fn read_password_with_stars() -> Result<String, Box<dyn std::error::Error>> {
+    let mut password = String::new();
+    enable_raw_mode()?;
+
+    let res = (|| -> Result<String, Box<dyn std::error::Error>> {
+        loop {
+            if let Event::Key(event) = event::read()? {
+                if event.kind != KeyEventKind::Release {
+                    match event.code {
+                        KeyCode::Enter => {
+                            eprintln!();
+                            break;
+                        }
+                        KeyCode::Backspace => {
+                            if !password.is_empty() {
+                                password.pop();
+                                // Move back, print space, move back again to clear character
+                                eprint!("\u{0008} \u{0008}");
+                                std::io::stderr().flush()?;
+                            }
+                        }
+                        KeyCode::Char('c') if event.modifiers.contains(KeyModifiers::CONTROL) => {
+                            eprintln!();
+                            return Err("Interrupted by user".into());
+                        }
+                        KeyCode::Char(c) => {
+                            password.push(c);
+                            eprint!("*");
+                            std::io::stderr().flush()?;
+                        }
+                        _ => {}
+                    }
+                }
+            }
+        }
+        Ok(password)
+    })();
+
+    disable_raw_mode()?;
+    res
 }

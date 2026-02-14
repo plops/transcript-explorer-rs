@@ -31,6 +31,9 @@ You will be prompted to enter a passphrase, or you can provide it via the CLI:
 transcript-explorer encrypt -i data/summaries.db -o data/summaries.db.age --password "your-secret"
 ```
 
+> [!TIP]
+> When prompted for a password interactively, you will see stars (`*`) as you type to provide visual feedback.
+
 ### Decrypting a Database
 
 To decrypt and decompress a file back to a standard SQLite database:

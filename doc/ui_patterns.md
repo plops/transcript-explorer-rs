@@ -29,6 +29,12 @@ Focused on reading.
 Focused on discovery.
 - **Color Coding**: Similarity scores are color-coded (Green > 0.9, Yellow > 0.8, Red otherwise) to provide immediate visual feedback on the quality of matches.
 
+## Interactive Prompts
+
+Certain actions (like encryption/decryption) require user interaction via standard CLI prompts:
+- **Password Entry**: Implements **masked feedback**. As characters are typed, a `*` is echoed to the terminal. This provides visual confirmation of input without exposing sensitive information.
+- **Input Interaction**: Supports backspace for correction and `Ctrl+C` for graceful cancellation.
+
 ## Clipboard Support
 
 On Linux, the application attempts to integrate with the system clipboard using the following priority:

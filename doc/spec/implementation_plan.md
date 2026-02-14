@@ -67,7 +67,7 @@ Table: `items`
 5. **Network & Caching**:
    - **Auto-Download**: Seamlessly downloads the default database if not present.
    - **X-Platform Cache**: Stores persistent data in `~/.cache` (Linux), `Library/Caches` (macOS), or `AppData/Local` (Windows).
-   - **CLI Password**: Support for `--password` to enable non-interactive scripting/deployment.
+   - **CLI Password**: Support for `--password` to enable non-interactive scripting/deployment. Interactive password entry provides **masked feedback (stars)** for better user UX.
 6. **UI Refinements**:
    - **Title Heuristics**: Skip generic prefixes like "**Abstract:**" when extracting list titles.
    - **Entry Collapsing**: Automatically collapse consecutive identical entries in both the **Main List** and **Similarity View**, with a toggle to expand (`Space`).

@@ -63,3 +63,7 @@
 - [x] Add instant detail preview (ID, Host, Link, Summary)
 - [x] Implement Yank Link ('y') and Open Link ('o') shortcuts in similarity view
 - [x] Fix accessibility/readability issues for default terminal schemes
+
+## Phase 12: Masked Password Feedback
+- [x] Implement masked feedback (stars) when entering passwords via CLI
+- [x] Update documentation to reflect visual feedback improvement
