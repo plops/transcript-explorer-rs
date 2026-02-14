@@ -8,6 +8,9 @@ use clap::{Parser, Subcommand};
 use crossterm::event::{self, Event, KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
 use std::path::{Path, PathBuf};
 use age::secrecy::Secret;
+use futures_util::StreamExt;
+use indicatif::{ProgressBar, ProgressStyle};
+use std::io::Write;
 
 /// TUI explorer for YouTube transcript summaries stored in SQLite
 #[derive(Parser)]
@@ -19,7 +22,13 @@ struct Cli {
     /// Path to the SQLite database file (deprecated/fallback if no subcommand)
     #[arg(short, long)]
     db: Option<PathBuf>,
+    
+    /// Password for encrypted database files
+    #[arg(short, long)]
+    password: Option<String>,
 }
+
+const DEFAULT_DB_URL: &str = "https://rocketrecap.com/exports/summaries20260123.age";
 
 #[derive(Subcommand)]
 enum Commands {
@@ -52,6 +61,9 @@ enum Commands {
         /// Output database file
         #[arg(short, long)]
         output: PathBuf,
+        /// Password for decryption
+        #[arg(short, long)]
+        password: Option<String>,
     },
 }
 
@@ -66,9 +78,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             if let Some(db_path) = cli.db {
                 Commands::Run { db: db_path }
             } else {
-                use clap::CommandFactory;
-                Cli::command().print_help()?;
-                return Ok(());
+                // Default behavior: download if needed and run
+                let project_dirs = directories::ProjectDirs::from("com", "rocketrecap", "transcript-explorer")
+                    .ok_or("Could not determine home directory")?;
+                let db_path = project_dirs.cache_dir().join("summaries20260123.age");
+                Commands::Run { db: db_path }
             }
         }
     };
@@ -88,28 +102,56 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 6 // Default
             };
 
-            eprint!("Enter password: ");
-            let password = rpassword::read_password()?;
+            let password = if let Some(p) = cli.password.as_ref() {
+                p.clone()
+            } else {
+                eprint!("Enter password: ");
+                rpassword::read_password()?
+            };
             eprintln!("Encrypting {} -> {} (quality: {})...", input.display(), output.display(), quality);
             codec::encrypt_stream(&input, &output, Secret::new(password), quality)?;
             eprintln!("Done.");
         }
-        Commands::Decrypt { input, output } => {
+        Commands::Decrypt { input, output, password } => {
             if !input.exists() {
                 eprintln!("Error: input file not found: {}", input.display());
                 std::process::exit(1);
             }
-            eprint!("Enter password: ");
-            let password = rpassword::read_password()?;
+            let password = if let Some(p) = password {
+                p
+            } else if let Some(p) = cli.password.as_ref() {
+                p.clone()
+            } else {
+                eprint!("Enter password: ");
+                rpassword::read_password()?
+            };
             eprintln!("Decrypting {} -> {} ...", input.display(), output.display());
             codec::decrypt_stream(&input, &output, Secret::new(password))?;
             eprintln!("Done.");
         }
         Commands::Run { db } => {
-             // Verify DB file exists
-            if !db.exists() {
-                eprintln!("Error: database file not found: {}", db.display());
-                std::process::exit(1);
+            let mut db_path = db;
+            
+            // Check if DB exists, if not try to find it in cache or download it
+            if !db_path.exists() {
+                let project_dirs = directories::ProjectDirs::from("com", "rocketrecap", "transcript-explorer")
+                    .ok_or("Could not determine home directory")?;
+                let cache_dir = project_dirs.cache_dir();
+                std::fs::create_dir_all(cache_dir)?;
+                
+                // If it's the default name or doesn't exist, we might want to check the cache
+                let cached_path = cache_dir.join("summaries20260123.age");
+                
+                if cached_path.exists() {
+                    db_path = cached_path;
+                } else if db_path.file_name().map_or(false, |n| n == "summaries20260123.age") || !db_path.exists() {
+                    eprintln!("Database not found. Downloading from {}...", DEFAULT_DB_URL);
+                    download_db(DEFAULT_DB_URL, &cached_path).await?;
+                    db_path = cached_path;
+                } else {
+                    eprintln!("Error: database file not found: {}", db_path.display());
+                    std::process::exit(1);
+                }
             }
 
             // Check if it's potentially encrypted (basic check or user invoked)
@@ -120,7 +162,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             // Age header is "age-encryption.org".
             
             let mut is_encrypted = false;
-            if let Ok(mut file) = std::fs::File::open(&db) {
+            if let Ok(mut file) = std::fs::File::open(&db_path) {
                 use std::io::Read;
                 let mut buffer = [0u8; 18]; // "age-encryption.org" length
                 if file.read_exact(&mut buffer).is_ok() {
@@ -133,19 +175,22 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             let _temp_file; // Keep alive until function end
             
             let target_db_path = if is_encrypted {
-                eprintln!("Detected encrypted database.");
-                eprint!("Enter password: ");
-                let password = rpassword::read_password()?;
+                eprintln!("Detected encrypted database: {}", db_path.display());
+                let password = if let Some(p) = cli.password {
+                    p
+                } else {
+                    eprint!("Enter password: ");
+                    rpassword::read_password()?
+                };
                 
                 eprintln!("Decrypting to temporary file...");
-                eprintln!("Decrypting to temporary file...");
                 let temp = tempfile::NamedTempFile::new()?;
-                codec::decrypt_stream(&db, temp.path(), Secret::new(password))?;
+                codec::decrypt_stream(&db_path, temp.path(), Secret::new(password))?;
                 
                 _temp_file = temp; // extend lifetime
                 _temp_file.path().to_path_buf()
             } else {
-                db
+                db_path
             };
 
             // Open database
@@ -435,5 +480,30 @@ async fn handle_similar_key(
         }
         _ => {}
     }
+    Ok(())
+}
+
+async fn download_db(url: &str, output: &Path) -> Result<(), Box<dyn std::error::Error>> {
+    let response = reqwest::get(url).await?;
+    let total_size = response.content_length().ok_or("Failed to get content length")?;
+
+    let pb = ProgressBar::new(total_size);
+    pb.set_style(ProgressStyle::default_bar()
+        .template("{spinner:.green} [{elapsed_precise}] [{wide_bar:.cyan/blue}] {bytes}/{total_bytes} ({eta})")?
+        .progress_chars("#>-"));
+
+    let mut file = std::fs::File::create(output)?;
+    let mut downloaded: u64 = 0;
+    let mut stream = response.bytes_stream();
+
+    while let Some(item) = stream.next().await {
+        let chunk = item?;
+        file.write_all(&chunk)?;
+        let new = std::cmp::min(downloaded + (chunk.len() as u64), total_size);
+        downloaded = new;
+        pb.set_position(new);
+    }
+
+    pb.finish_with_message("Download complete");
     Ok(())
 }

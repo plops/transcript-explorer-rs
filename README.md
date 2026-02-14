@@ -34,10 +34,24 @@ cargo build --release
 
 ## Usage
 
-Run the binary by providing the path to your `summaries.db` file:
+Run the binary. If no database path is provided, it will automatically download the latest summary database (~35MB) to your system's cache directory:
 
 ```bash
-./target/release/transcript-explorer --db /path/to/your/summaries.db
+./target/release/transcript-explorer
+```
+
+Alternatively, provide a path to your own `summaries.db` or an encrypted `.age` file:
+
+```bash
+./target/release/transcript-explorer --db /path/to/your/summaries.db.age
+```
+
+### Password Argument
+
+For encrypted databases, you can provide the password via the command line to skip the interactive prompt:
+
+```bash
+./target/release/transcript-explorer --db summaries.db.age --password "your-secret-pass"
 ```
 
 ### Keybindings

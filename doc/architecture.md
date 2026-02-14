@@ -26,6 +26,12 @@ Built using `ratatui` with the `crossterm` backend.
 ### 4. Maintenance Tools (`tools/`)
 The project includes specialized tools for database preparation and sharing.
 - **Cleanup Script (`cleanup_db.py`)**: A Python-based utility used to prepare datasets for public distribution. It removes error entries, strips large transcript data, and truncates high-dimensional embeddings to 768 dimensions to optimize for similarity search while reducing disk footprint.
+30: 
+### 5. Download & Caching (`src/main.rs`)
+Automatically manages the database availability for a seamless first-run experience.
+- **HTTPS Download**: Uses `reqwest` and `indicatif` to download the latest encrypted database from the server with a terminal progress bar.
+- **Project Directories**: Uses the `directories` crate to resolve cross-platform cache paths, ensuring data is stored in the correct locations for Linux, macOS, and Windows.
+- **Temporary Decryption**: Encrypted databases are decrypted on-the-fly to volatile temporary files using `tempfile`, which are automatically cleaned up on exit.
 
 ## Data Flow
 

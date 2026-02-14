@@ -25,7 +25,11 @@ transcript-explorer encrypt -i data/summaries.db -o data/summaries.db.age
   ```
 - `--best`: Use best compression (Brotli quality 11). Smallest file size, but very slow.
 
-You will be prompted to enter a passphrase.
+You will be prompted to enter a passphrase, or you can provide it via the CLI:
+
+```bash
+transcript-explorer encrypt -i data/summaries.db -o data/summaries.db.age --password "your-secret"
+```
 
 ### Decrypting a Database
 
@@ -35,7 +39,7 @@ To decrypt and decompress a file back to a standard SQLite database:
 transcript-explorer decrypt -i data/summaries.db.age -o data/summaries_restored.db
 ```
 
-You will be prompted for the passphrase.
+You will be prompted for the passphrase, or you can pass it via `--password`.
 
 ### Running with an Encrypted Database
 
@@ -47,7 +51,7 @@ transcript-explorer run --db data/summaries.db.age
 transcript-explorer --db data/summaries.db.age
 ```
 
-1. The application will prompt for the passphrase.
+1. The application will prompt for the passphrase (unless `--password` is used).
 2. It decrypts the database to a secure temporary file.
 3. The TUI launches using the temporary database.
 4. When you quit the application, the temporary file is automatically deleted.

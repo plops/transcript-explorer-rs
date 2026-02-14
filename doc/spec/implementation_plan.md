@@ -13,6 +13,9 @@ A cross-platform Rust TUI application for browsing, searching, and exploring ~12
 | CLI Args | **`clap`** (derive) | Accept DB file path, version info, and subcommands |
 | Compression | **`brotli`** | Efficient streaming compression for database files |
 | Encryption | **`age`** | Modern, secure encryption (requires `opt-level=3` for speed) |
+| Networking | **`reqwest`** | Async HTTPS client for database downloads |
+| Progress Bar | **`indicatif`** | Terminal progress bar for downloads |
+| Directories | **`directories`** | Cross-platform cache directory resolution |
 
 ## Database Schema (read-only)
 
@@ -61,7 +64,11 @@ Table: `items`
 2. **Filtering**: Real-time, synchronous in-memory filtering that updates **after every keystroke**.
 3. **Similarity**: Semantic search using `vector_distance_cos` combined with `vector_slice(..., 0, 768)` to support Matryoshka embeddings.
 4. **Detail**: Multi-pane view for technical summaries and full transcripts.
-5. **UI Refinements**:
+5. **Network & Caching**:
+   - **Auto-Download**: Seamlessly downloads the default database if not present.
+   - **X-Platform Cache**: Stores persistent data in `~/.cache` (Linux), `Library/Caches` (macOS), or `AppData/Local` (Windows).
+   - **CLI Password**: Support for `--password` to enable non-interactive scripting/deployment.
+6. **UI Refinements**:
    - **Title Heuristics**: Skip generic prefixes like "**Abstract:**" when extracting list titles.
    - **Entry Collapsing**: Automatically collapse consecutive identical entries in both the **Main List** and **Similarity View**, with a toggle to expand (`Space`).
    - **Live Search**: Integrated real-time filtering updates.
