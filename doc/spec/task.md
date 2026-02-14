@@ -53,3 +53,7 @@
 - [x] Switch to single-stream Brotli processing for maximum compatibility
 - [x] Fix database panic caused by multi-stream data loss
 - [x] Remove `rayon` dependency to simplify the codebase
+
+## Phase 10: Debugging & Stabilization
+- [x] Increase `scrypt` max work factor in debug builds to resolve `ExcessiveWork` errors
+- [x] Update documentation and maintenance specs

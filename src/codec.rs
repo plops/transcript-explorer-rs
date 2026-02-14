@@ -62,7 +62,8 @@ pub fn decrypt_stream(
         _ => return Err("Input file is not encrypted with a passphrase".into()),
     };
 
-    let mut reader = decryptor.decrypt(&password, None)?;
+    let max_work_factor = if cfg!(debug_assertions) { Some(22) } else { None };
+    let mut reader = decryptor.decrypt(&password, max_work_factor)?;
     println!("Decryption Init: {:?}", start_dec.elapsed());
     
     let start_decomp = std::time::Instant::now();

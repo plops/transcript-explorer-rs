@@ -71,3 +71,6 @@ transcript-explorer --db data/summaries.db.age
 - **Algorithm**: 
     - **Compression**: Brotli (Default Quality 6, Window 20). Configurable via `--fast` (Quality 1) or `--best` (Quality 11).
     - **Encryption**: Age (Passphrase-based, Scrypt work factor 18)
+74: 
+75: > [!TIP]
+76: > If you encounter an `ExcessiveWork` error when running in **debug mode**, this is usually due to the slower performance of `scrypt` without compiler optimizations. The application automatically increases the allowed work factor to 22 in debug builds to accommodate this.
