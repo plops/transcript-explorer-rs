@@ -57,3 +57,9 @@
 ## Phase 10: Debugging & Stabilization
 - [x] Increase `scrypt` max work factor in debug builds to resolve `ExcessiveWork` errors
 - [x] Update documentation and maintenance specs
+
+## Phase 11: Enhanced Similarity View
+- [x] Implement preview pane in similarity search view (top/bottom split)
+- [x] Add instant detail preview (ID, Host, Link, Summary)
+- [x] Implement Yank Link ('y') and Open Link ('o') shortcuts in similarity view
+- [x] Fix accessibility/readability issues for default terminal schemes

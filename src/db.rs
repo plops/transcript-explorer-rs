@@ -40,6 +40,7 @@ pub struct SimilarResult {
     pub host: String,
     pub summary_preview: String,
     pub distance: f64,
+    pub original_source_link: String,
 }
 
 // ── Value extraction helpers ──
@@ -169,7 +170,8 @@ impl Database {
             .conn
             .query(
                 "SELECT t.identifier, t.host, substr(t.summary, 1, 500), \
-                 vector_distance_cos(vector_slice(t.embedding, 0, 768), vector_slice(s.embedding, 0, 768)) AS dist \
+                 vector_distance_cos(vector_slice(t.embedding, 0, 768), vector_slice(s.embedding, 0, 768)) AS dist, \
+                 COALESCE(t.original_source_link, '') \
                  FROM items t, (SELECT embedding FROM items WHERE identifier = ?1) s \
                  WHERE t.embedding IS NOT NULL AND t.identifier != ?1 \
                  ORDER BY dist \
@@ -187,6 +189,7 @@ impl Database {
                 host: val_string(&row.get_value(1)?),
                 summary_preview: val_string(&row.get_value(2)?),
                 distance: val_f64(&row.get_value(3)?),
+                original_source_link: val_string(&row.get_value(4)?),
             });
         }
 

@@ -4,18 +4,19 @@ use ratatui::{
     layout::{Alignment, Constraint, Direction, Layout},
     style::{Color, Modifier, Style},
     text::{Line, Span},
-    widgets::{Block, Borders, List, ListItem, ListState, Paragraph},
+    widgets::{Block, Borders, List, ListItem, ListState, Paragraph, Wrap},
 };
 
 pub fn render(app: &App, frame: &mut Frame) {
     let area = frame.area();
 
-    // Layout: header(4) + results(min) + status(1)
+    // Layout: header(4) + results(min) + preview(10) + status(1)
     let chunks = Layout::default()
         .direction(Direction::Vertical)
         .constraints([
             Constraint::Length(4),
             Constraint::Min(5),
+            Constraint::Length(10),
             Constraint::Length(1),
         ])
         .split(area);
@@ -58,12 +59,18 @@ pub fn render(app: &App, frame: &mut Frame) {
 
     // ── Results list ──
     let mut items = Vec::new();
+    let mut selected_result = None;
+
     for (i, group) in app.grouped_similar_results.iter().enumerate() {
         if group.items.is_empty() {
             continue;
         }
 
         let result = &group.items[0];
+        if i == app.similar_selected {
+            selected_result = Some(result.clone());
+        }
+
         let similarity = 1.0 - result.distance;
         let sim_color = if similarity > 0.90 {
             Color::Green
@@ -150,6 +157,56 @@ pub fn render(app: &App, frame: &mut Frame) {
     list_state.select(Some(app.similar_selected));
     frame.render_stateful_widget(list_widget, chunks[1], &mut list_state);
 
+    // ── Preview Pane ──
+    if let Some(res) = selected_result {
+        let similarity = 1.0 - res.distance;
+        let sim_color = if similarity > 0.90 {
+            Color::Green
+        } else if similarity > 0.80 {
+            Color::Yellow
+        } else {
+            Color::Red
+        };
+
+        let preview_lines = vec![
+            Line::from(vec![
+                Span::styled(" ID: ", Style::default().fg(Color::DarkGray)),
+                Span::styled(res.identifier.to_string(), Style::default().fg(Color::White).add_modifier(Modifier::BOLD)),
+                Span::raw("  "),
+                Span::styled("Host: ", Style::default().fg(Color::DarkGray)),
+                Span::styled(&res.host, Style::default().fg(Color::White)),
+                Span::raw("  "),
+                Span::styled("Similarity: ", Style::default().fg(Color::DarkGray)),
+                Span::styled(format!("{:.1}%", similarity * 100.0), Style::default().fg(sim_color).add_modifier(Modifier::BOLD)),
+            ]),
+            Line::from(vec![
+                Span::styled(" Link: ", Style::default().fg(Color::DarkGray)),
+                Span::styled(&res.original_source_link, Style::default().fg(Color::Blue).add_modifier(Modifier::UNDERLINED)),
+            ]),
+            Line::from(vec![
+                Span::styled(" Summary Preview: ", Style::default().fg(Color::DarkGray)),
+            ]),
+            Line::from(vec![
+                Span::raw(" "),
+                Span::styled(&res.summary_preview, Style::default().fg(Color::White)),
+            ]),
+        ];
+
+        let preview_block = Paragraph::new(preview_lines)
+            .wrap(Wrap { trim: true })
+            .block(
+                Block::default()
+                    .borders(Borders::ALL)
+                    .border_style(Style::default().fg(Color::Cyan))
+                    .title(" Selected Result Preview "),
+            );
+        frame.render_widget(preview_block, chunks[2]);
+    } else {
+         let empty_preview = Paragraph::new("No result selected")
+            .block(Block::default().borders(Borders::ALL).border_style(Style::default().fg(Color::DarkGray)));
+        frame.render_widget(empty_preview, chunks[2]);
+    }
+
     // ── Status bar ──
     let status_line = Line::from(vec![
         Span::styled(
@@ -174,6 +231,20 @@ pub fn render(app: &App, frame: &mut Frame) {
         ),
         Span::raw(" Detail  "),
         Span::styled(
+            "y",
+            Style::default()
+                .fg(Color::Cyan)
+                .add_modifier(Modifier::BOLD),
+        ),
+        Span::raw(" Yank Link  "),
+        Span::styled(
+            "o",
+            Style::default()
+                .fg(Color::Cyan)
+                .add_modifier(Modifier::BOLD),
+        ),
+        Span::raw(" Open Link  "),
+        Span::styled(
             "Esc",
             Style::default()
                 .fg(Color::Cyan)
@@ -183,5 +254,5 @@ pub fn render(app: &App, frame: &mut Frame) {
         Span::styled(&app.status_msg, Style::default().fg(Color::DarkGray)),
     ]);
     let status_bar = Paragraph::new(status_line);
-    frame.render_widget(status_bar, chunks[2]);
+    frame.render_widget(status_bar, chunks[3]);
 }

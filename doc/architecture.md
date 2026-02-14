@@ -22,6 +22,7 @@ Built using `ratatui` with the `crossterm` backend.
 - **Immediate Mode**: The UI is redrawn on every tick (250ms) or event, ensuring a responsive feel.
 - **Custom Widgets**: Utilizes `List`, `Paragraph`, `Tabs`, and `Clear` widgets to build a multi-pane interface.
 - **Layouts**: Uses constraint-based layouts to ensure the app scales properly across various terminal sizes.
+- **Similarity Preview Pane**: The similarity search view features a vertical split with a dedicated preview pane for the currently selected result, reducing navigation steps.
 
 ### 4. Maintenance Tools (`tools/`)
 The project includes specialized tools for database preparation and sharing.

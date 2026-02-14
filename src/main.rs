@@ -478,6 +478,50 @@ async fn handle_similar_key(
         KeyCode::Enter => {
             app.open_detail().await?;
         }
+        KeyCode::Char('y') => {
+            if let Some(group) = app.grouped_similar_results.get(app.similar_selected) {
+                if let Some(res) = group.items.first() {
+                    let link = &res.original_source_link;
+                    if !link.is_empty() {
+                        if let Ok(mut child) = std::process::Command::new("xclip")
+                            .args(["-selection", "clipboard"])
+                            .stdin(std::process::Stdio::piped())
+                            .spawn()
+                        {
+                            use std::io::Write;
+                            if let Some(mut stdin) = child.stdin.take() {
+                                let _ = stdin.write_all(link.as_bytes());
+                            }
+                            let _ = child.wait();
+                            app.status_msg = format!("Copied: {}", link);
+                        } else if let Ok(mut child) = std::process::Command::new("wl-copy")
+                            .stdin(std::process::Stdio::piped())
+                            .spawn()
+                        {
+                            use std::io::Write;
+                            if let Some(mut stdin) = child.stdin.take() {
+                                let _ = stdin.write_all(link.as_bytes());
+                            }
+                            let _ = child.wait();
+                            app.status_msg = format!("Copied: {}", link);
+                        } else {
+                            app.status_msg = format!("Link: {} (clipboard not available)", link);
+                        }
+                    }
+                }
+            }
+        }
+        KeyCode::Char('o') => {
+            if let Some(group) = app.grouped_similar_results.get(app.similar_selected) {
+                if let Some(res) = group.items.first() {
+                    let link = &res.original_source_link;
+                    if !link.is_empty() {
+                        let _ = std::process::Command::new("xdg-open").arg(link).spawn();
+                        app.status_msg = format!("Opening: {}", link);
+                    }
+                }
+            }
+        }
         _ => {}
     }
     Ok(())
