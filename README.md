@@ -1,3 +1,5 @@
+[![Ask DeepWiki](https://deepwiki.com/badge.svg)](https://deepwiki.com/plops/transcript-explorer-rs)
+
 # Transcript Explorer
 
 A cross-platform Rust Terminal User Interface (TUI) for browsing, searching, and exploring YouTube transcript summaries stored in a SQLite database.
