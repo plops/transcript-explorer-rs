@@ -43,5 +43,8 @@
 ## Phase 7: Compression and Encryption
 - [x] Integrate `age` for encryption and `brotli` for compression
 - [x] Add CLI subcommands (`encrypt`, `decrypt`, `run`)
-- [x] Implement transparent loading of encrypted databases via temporary file
 - [x] Verify round-trip encryption/decryption
+
+## Phase 8: Performance Optimization
+- [x] Implement multithreaded compression with `rayon`
+- [x] Add performance metrics to CLI output
