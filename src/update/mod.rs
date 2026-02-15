@@ -215,6 +215,140 @@ impl Default for UpdateConfiguration {
     }
 }
 
+impl UpdateConfiguration {
+    /// Load configuration from environment variables, config file, or defaults
+    /// Priority: environment variables > config file > defaults
+    pub fn load() -> Result<Self, UpdateError> {
+        let mut config = Self::default();
+
+        // Try to load from config file first
+        if let Ok(file_config) = Self::load_from_file() {
+            config = file_config;
+        }
+
+        // Override with environment variables if present
+        config.apply_env_overrides();
+
+        Ok(config)
+    }
+
+    /// Load configuration from environment variables
+    fn apply_env_overrides(&mut self) {
+        if let Ok(enabled) = std::env::var("UPDATE_ENABLED") {
+            match enabled.to_lowercase().as_str() {
+                "true" | "1" | "yes" => self.enabled = true,
+                "false" | "0" | "no" => self.enabled = false,
+                _ => {
+                    eprintln!("Warning: Invalid UPDATE_ENABLED value '{}', using default", enabled);
+                }
+            }
+        }
+
+        if let Ok(interval) = std::env::var("UPDATE_CHECK_INTERVAL_HOURS") {
+            match interval.parse::<u32>() {
+                Ok(hours) => self.check_interval_hours = hours,
+                Err(_) => {
+                    eprintln!("Warning: Invalid UPDATE_CHECK_INTERVAL_HOURS value '{}', using default", interval);
+                }
+            }
+        }
+
+        if let Ok(interactive) = std::env::var("UPDATE_INTERACTIVE_MODE") {
+            match interactive.to_lowercase().as_str() {
+                "true" | "1" | "yes" => self.interactive_mode = true,
+                "false" | "0" | "no" => self.interactive_mode = false,
+                _ => {
+                    eprintln!("Warning: Invalid UPDATE_INTERACTIVE_MODE value '{}', using default", interactive);
+                }
+            }
+        }
+
+        if let Ok(owner) = std::env::var("UPDATE_GITHUB_REPO_OWNER") {
+            self.github_repo_owner = owner;
+        }
+
+        if let Ok(name) = std::env::var("UPDATE_GITHUB_REPO_NAME") {
+            self.github_repo_name = name;
+        }
+
+        if let Ok(temp_dir) = std::env::var("UPDATE_TEMP_DIRECTORY") {
+            self.temp_directory = PathBuf::from(temp_dir);
+        }
+
+        if let Ok(backup_dir) = std::env::var("UPDATE_BACKUP_DIRECTORY") {
+            self.backup_directory = PathBuf::from(backup_dir);
+        }
+    }
+
+    /// Load configuration from a JSON config file
+    /// Looks for config file in standard locations
+    fn load_from_file() -> Result<Self, UpdateError> {
+        let config_path = Self::find_config_file()?;
+        let config_content = std::fs::read_to_string(&config_path)
+            .map_err(|e| UpdateError::ConfigurationError(
+                format!("Failed to read config file: {}", e)
+            ))?;
+
+        serde_json::from_str::<Self>(&config_content)
+            .map_err(|e| UpdateError::ConfigurationError(
+                format!("Failed to parse config file: {}", e)
+            ))
+    }
+
+    /// Find config file in standard locations
+    fn find_config_file() -> Result<PathBuf, UpdateError> {
+        // Try current directory first
+        let current_dir_config = PathBuf::from("update-config.json");
+        if current_dir_config.exists() {
+            return Ok(current_dir_config);
+        }
+
+        // Try home directory
+        if let Ok(home) = std::env::var("HOME") {
+            let home_config = PathBuf::from(home).join(".config/transcript-explorer/update-config.json");
+            if home_config.exists() {
+                return Ok(home_config);
+            }
+        }
+
+        // Try config directory from env var
+        if let Ok(config_dir) = std::env::var("UPDATE_CONFIG_DIR") {
+            let config_path = PathBuf::from(config_dir).join("update-config.json");
+            if config_path.exists() {
+                return Ok(config_path);
+            }
+        }
+
+        // No config file found, return error to signal fallback to defaults
+        Err(UpdateError::ConfigurationError(
+            "No config file found, using defaults".to_string()
+        ))
+    }
+
+    /// Validate configuration and return errors for invalid values
+    pub fn validate(&self) -> Result<(), UpdateError> {
+        if self.github_repo_owner.is_empty() {
+            return Err(UpdateError::ConfigurationError(
+                "github_repo_owner cannot be empty".to_string()
+            ));
+        }
+
+        if self.github_repo_name.is_empty() {
+            return Err(UpdateError::ConfigurationError(
+                "github_repo_name cannot be empty".to_string()
+            ));
+        }
+
+        if self.check_interval_hours == 0 {
+            return Err(UpdateError::ConfigurationError(
+                "check_interval_hours must be greater than 0".to_string()
+            ));
+        }
+
+        Ok(())
+    }
+}
+
 /// Platform detector for identifying the current OS and architecture
 pub struct PlatformDetector;
 
@@ -2423,5 +2557,185 @@ mod property_tests {
         let result = manager.release_lock();
         assert!(result.is_ok());
     }
-}
 
+    #[test]
+    fn test_update_configuration_load_from_env() {
+        // Save original env vars
+        let original_enabled = std::env::var("UPDATE_ENABLED").ok();
+        let original_interval = std::env::var("UPDATE_CHECK_INTERVAL_HOURS").ok();
+        let original_interactive = std::env::var("UPDATE_INTERACTIVE_MODE").ok();
+        let original_owner = std::env::var("UPDATE_GITHUB_REPO_OWNER").ok();
+        let original_name = std::env::var("UPDATE_GITHUB_REPO_NAME").ok();
+
+        // Set test env vars
+        unsafe {
+            std::env::set_var("UPDATE_ENABLED", "false");
+            std::env::set_var("UPDATE_CHECK_INTERVAL_HOURS", "48");
+            std::env::set_var("UPDATE_INTERACTIVE_MODE", "false");
+            std::env::set_var("UPDATE_GITHUB_REPO_OWNER", "test-owner");
+            std::env::set_var("UPDATE_GITHUB_REPO_NAME", "test-repo");
+        }
+
+        // Test apply_env_overrides directly
+        let mut config = UpdateConfiguration::default();
+        config.apply_env_overrides();
+        
+        assert!(!config.enabled);
+        assert_eq!(config.check_interval_hours, 48);
+        assert!(!config.interactive_mode);
+        assert_eq!(config.github_repo_owner, "test-owner");
+        assert_eq!(config.github_repo_name, "test-repo");
+
+        // Restore original env vars
+        unsafe {
+            match original_enabled {
+                Some(val) => std::env::set_var("UPDATE_ENABLED", val),
+                None => std::env::remove_var("UPDATE_ENABLED"),
+            }
+            match original_interval {
+                Some(val) => std::env::set_var("UPDATE_CHECK_INTERVAL_HOURS", val),
+                None => std::env::remove_var("UPDATE_CHECK_INTERVAL_HOURS"),
+            }
+            match original_interactive {
+                Some(val) => std::env::set_var("UPDATE_INTERACTIVE_MODE", val),
+                None => std::env::remove_var("UPDATE_INTERACTIVE_MODE"),
+            }
+            match original_owner {
+                Some(val) => std::env::set_var("UPDATE_GITHUB_REPO_OWNER", val),
+                None => std::env::remove_var("UPDATE_GITHUB_REPO_OWNER"),
+            }
+            match original_name {
+                Some(val) => std::env::set_var("UPDATE_GITHUB_REPO_NAME", val),
+                None => std::env::remove_var("UPDATE_GITHUB_REPO_NAME"),
+            }
+        }
+    }
+
+    #[test]
+    fn test_update_configuration_env_override_enabled() {
+        let original = std::env::var("UPDATE_ENABLED").ok();
+        unsafe {
+            std::env::set_var("UPDATE_ENABLED", "true");
+        }
+
+        let mut config = UpdateConfiguration::default();
+        config.apply_env_overrides();
+        assert!(config.enabled);
+
+        unsafe {
+            std::env::set_var("UPDATE_ENABLED", "false");
+        }
+        config.apply_env_overrides();
+        assert!(!config.enabled);
+
+        unsafe {
+            match original {
+                Some(val) => std::env::set_var("UPDATE_ENABLED", val),
+                None => std::env::remove_var("UPDATE_ENABLED"),
+            }
+        }
+    }
+
+    #[test]
+    fn test_update_configuration_env_override_invalid_values() {
+        let original_enabled = std::env::var("UPDATE_ENABLED").ok();
+        let original_interval = std::env::var("UPDATE_CHECK_INTERVAL_HOURS").ok();
+
+        // Test invalid boolean value - should use default
+        unsafe {
+            std::env::set_var("UPDATE_ENABLED", "invalid");
+        }
+        let mut config = UpdateConfiguration::default();
+        config.enabled = true;
+        config.apply_env_overrides();
+        assert!(config.enabled); // Should remain unchanged
+
+        // Test invalid number value - should use default
+        unsafe {
+            std::env::set_var("UPDATE_CHECK_INTERVAL_HOURS", "not-a-number");
+        }
+        config.check_interval_hours = 24;
+        config.apply_env_overrides();
+        assert_eq!(config.check_interval_hours, 24); // Should remain unchanged
+
+        // Restore
+        unsafe {
+            match original_enabled {
+                Some(val) => std::env::set_var("UPDATE_ENABLED", val),
+                None => std::env::remove_var("UPDATE_ENABLED"),
+            }
+            match original_interval {
+                Some(val) => std::env::set_var("UPDATE_CHECK_INTERVAL_HOURS", val),
+                None => std::env::remove_var("UPDATE_CHECK_INTERVAL_HOURS"),
+            }
+        }
+    }
+
+    #[test]
+    fn test_update_configuration_validate_success() {
+        let config = UpdateConfiguration::default();
+        assert!(config.validate().is_ok());
+    }
+
+    #[test]
+    fn test_update_configuration_validate_empty_owner() {
+        let mut config = UpdateConfiguration::default();
+        config.github_repo_owner = String::new();
+        assert!(config.validate().is_err());
+    }
+
+    #[test]
+    fn test_update_configuration_validate_empty_name() {
+        let mut config = UpdateConfiguration::default();
+        config.github_repo_name = String::new();
+        assert!(config.validate().is_err());
+    }
+
+    #[test]
+    fn test_update_configuration_validate_zero_interval() {
+        let mut config = UpdateConfiguration::default();
+        config.check_interval_hours = 0;
+        assert!(config.validate().is_err());
+    }
+
+    #[test]
+    fn test_update_configuration_serialization() {
+        let config = UpdateConfiguration::default();
+        let json = serde_json::to_string(&config).unwrap();
+        let deserialized: UpdateConfiguration = serde_json::from_str(&json).unwrap();
+        
+        assert_eq!(config.enabled, deserialized.enabled);
+        assert_eq!(config.check_interval_hours, deserialized.check_interval_hours);
+        assert_eq!(config.interactive_mode, deserialized.interactive_mode);
+        assert_eq!(config.github_repo_owner, deserialized.github_repo_owner);
+        assert_eq!(config.github_repo_name, deserialized.github_repo_name);
+    }
+
+    #[test]
+    fn test_update_configuration_env_override_paths() {
+        let original_temp = std::env::var("UPDATE_TEMP_DIRECTORY").ok();
+        let original_backup = std::env::var("UPDATE_BACKUP_DIRECTORY").ok();
+
+        unsafe {
+            std::env::set_var("UPDATE_TEMP_DIRECTORY", "/tmp/test");
+            std::env::set_var("UPDATE_BACKUP_DIRECTORY", "/tmp/backup");
+        }
+
+        let mut config = UpdateConfiguration::default();
+        config.apply_env_overrides();
+        
+        assert_eq!(config.temp_directory, PathBuf::from("/tmp/test"));
+        assert_eq!(config.backup_directory, PathBuf::from("/tmp/backup"));
+
+        unsafe {
+            match original_temp {
+                Some(val) => std::env::set_var("UPDATE_TEMP_DIRECTORY", val),
+                None => std::env::remove_var("UPDATE_TEMP_DIRECTORY"),
+            }
+            match original_backup {
+                Some(val) => std::env::set_var("UPDATE_BACKUP_DIRECTORY", val),
+                None => std::env::remove_var("UPDATE_BACKUP_DIRECTORY"),
+            }
+        }
+    }
+}
