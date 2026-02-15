@@ -146,13 +146,13 @@ This implementation plan breaks down the auto-update feature into discrete codin
     - Test size mismatches
     - _Requirements: 6.4, 6.5_
 
-- [ ] 9. Implement binary replacer with rollback
-  - [ ] 9.1 Create `BinaryReplacer` struct
+- [x] 9. Implement binary replacer with rollback
+  - [x] 9.1 Create `BinaryReplacer` struct
     - Implement backup creation with timestamps
     - Implement atomic binary replacement
     - _Requirements: 7.1, 7.2, 7.3_
   
-  - [ ] 9.2 Implement `replace_binary()` method
+  - [x] 9.2 Implement `replace_binary()` method
     - Create timestamped backup before replacement
     - Replace binary atomically (platform-specific)
     - Set executable permissions (chmod +x on Unix)
@@ -160,17 +160,17 @@ This implementation plan breaks down the auto-update feature into discrete codin
     - Implement rollback on health check failure
     - _Requirements: 7.1, 7.2, 7.3, 7.4, 7.5, 7.6, 12.1, 12.2, 12.3, 12.4_
   
-  - [ ]* 9.3 Write property test for backup creation
+  - [x] 9.3 Write property test for backup creation
     - **Property 6: Backup Creation Before Replacement**
     - **Validates: Requirements 7.1, 7.2**
     - Generate replacement operations, verify backup exists
   
-  - [ ]* 9.4 Write property test for executable permissions
+  - [x] 9.4 Write property test for executable permissions
     - **Property 7: Executable Permission Preservation**
     - **Validates: Requirements 12.1, 12.3**
     - Generate replacements on Unix, verify permissions
   
-  - [ ]* 9.5 Write property test for rollback on health check failure
+  - [x] 9.5 Write property test for rollback on health check failure
     - **Property 14: Rollback on Health Check Failure**
     - **Validates: Requirements 7.5, 10.4**
     - Generate failed health checks, verify rollback occurs

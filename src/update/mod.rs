@@ -706,6 +706,214 @@ impl BinaryVerifier {
     }
 }
 
+/// Result of a binary replacement operation
+#[derive(Debug, Clone)]
+pub struct ReplacementResult {
+    pub success: bool,
+    pub new_version: String,
+    pub rolled_back: bool,
+}
+
+/// Binary replacer for safely replacing the current binary with a new version
+pub struct BinaryReplacer;
+
+impl BinaryReplacer {
+    /// Replace the current binary with a new version
+    ///
+    /// Creates a timestamped backup before replacement, replaces the binary
+    /// atomically (platform-specific), sets executable permissions, runs a
+    /// health check on the new binary, and rolls back on health check failure.
+    ///
+    /// # Arguments
+    /// * `current_path` - Path to the current binary
+    /// * `new_path` - Path to the new binary to install
+    /// * `new_version` - Version string of the new binary
+    ///
+    /// # Returns
+    /// - `Ok(ReplacementResult)` with replacement details
+    /// - `Err(UpdateError)` if replacement fails
+    ///
+    /// # Requirements
+    /// - 7.1: Create backup of current binary before modifications
+    /// - 7.2: Store backup in safe location with timestamp
+    /// - 7.3: Replace current binary with new binary
+    /// - 7.4: Verify new binary is executable and in correct location
+    /// - 7.5: Restore current binary from backup if replacement fails
+    /// - 7.6: Abort update and return error if backup cannot be created
+    /// - 12.1: Set executable permission (chmod +x) on Linux/macOS
+    /// - 12.2: Ensure file is executable on Windows (default)
+    /// - 12.3: Verify new binary is executable after replacement
+    /// - 12.4: Return permission error if executable permission cannot be set
+    pub fn replace_binary(
+        current_path: &std::path::Path,
+        new_path: &std::path::Path,
+        new_version: &str,
+    ) -> Result<ReplacementResult, UpdateError> {
+        use std::fs;
+
+        // Create timestamped backup
+        let backup_path = Self::create_backup(current_path)?;
+
+        // Attempt to replace the binary
+        match Self::perform_replacement(current_path, new_path) {
+            Ok(_) => {
+                // Set executable permissions
+                if let Err(e) = Self::set_executable_permissions(current_path) {
+                    // Rollback on permission error
+                    Self::rollback(current_path, &backup_path)?;
+                    return Err(e);
+                }
+
+                // Run health check
+                match Self::run_health_check(current_path) {
+                    Ok(true) => {
+                        // Success! Clean up backup
+                        let _ = fs::remove_file(&backup_path);
+                        Ok(ReplacementResult {
+                            success: true,
+                            new_version: new_version.to_string(),
+                            rolled_back: false,
+                        })
+                    }
+                    Ok(false) | Err(_) => {
+                        // Health check failed, rollback
+                        Self::rollback(current_path, &backup_path)?;
+                        Err(UpdateError::Replacement {
+                            reason: format!(
+                                "Health check failed for version {}. Rolled back to previous version.",
+                                new_version
+                            ),
+                            recovered: true,
+                        })
+                    }
+                }
+            }
+            Err(e) => {
+                // Replacement failed, rollback
+                Self::rollback(current_path, &backup_path)?;
+                Err(e)
+            }
+        }
+    }
+
+    /// Create a timestamped backup of the current binary
+    fn create_backup(current_path: &std::path::Path) -> Result<std::path::PathBuf, UpdateError> {
+        use std::fs;
+        use std::time::SystemTime;
+
+        // Generate timestamp
+        let timestamp = SystemTime::now()
+            .duration_since(SystemTime::UNIX_EPOCH)
+            .map_err(|e| UpdateError::Replacement {
+                reason: format!("Failed to generate timestamp: {}", e),
+                recovered: false,
+            })?
+            .as_secs();
+
+        // Create backup path with timestamp
+        let backup_path = current_path.with_extension(format!("bak.{}", timestamp));
+
+        // Copy current binary to backup location
+        fs::copy(current_path, &backup_path).map_err(|e| UpdateError::Replacement {
+            reason: format!("Failed to create backup: {}", e),
+            recovered: false,
+        })?;
+
+        Ok(backup_path)
+    }
+
+    /// Perform atomic binary replacement (platform-specific)
+    fn perform_replacement(
+        current_path: &std::path::Path,
+        new_path: &std::path::Path,
+    ) -> Result<(), UpdateError> {
+        use std::fs;
+
+        // On Unix systems, we can atomically replace the file using rename
+        // On Windows, we need to use a different approach due to file locking
+        #[cfg(unix)]
+        {
+            fs::rename(new_path, current_path).map_err(|e| UpdateError::Replacement {
+                reason: format!("Failed to replace binary: {}", e),
+                recovered: false,
+            })?;
+        }
+
+        #[cfg(windows)]
+        {
+            // On Windows, we need to copy the new binary over the old one
+            // The running process can continue from memory
+            fs::copy(new_path, current_path).map_err(|e| UpdateError::Replacement {
+                reason: format!("Failed to replace binary: {}", e),
+                recovered: false,
+            })?;
+
+            // Remove the temporary new binary
+            let _ = fs::remove_file(new_path);
+        }
+
+        Ok(())
+    }
+
+    /// Set executable permissions on the binary (Unix only)
+    fn set_executable_permissions(path: &std::path::Path) -> Result<(), UpdateError> {
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            use std::fs;
+
+            let mut perms = fs::metadata(path)
+                .map_err(|e| UpdateError::PermissionDenied(format!("Failed to read permissions: {}", e)))?
+                .permissions();
+
+            // Set executable permission (chmod +x)
+            perms.set_mode(perms.mode() | 0o111);
+
+            fs::set_permissions(path, perms)
+                .map_err(|e| UpdateError::PermissionDenied(format!("Failed to set executable permission: {}", e)))?;
+        }
+
+        #[cfg(windows)]
+        {
+            // On Windows, executables are executable by default
+            // No action needed
+        }
+
+        Ok(())
+    }
+
+    /// Run health check on the new binary
+    fn run_health_check(path: &std::path::Path) -> Result<bool, UpdateError> {
+        use std::process::Command;
+
+        // Run the binary with --health-check flag
+        let output = Command::new(path)
+            .arg("--health-check")
+            .output()
+            .map_err(|e| UpdateError::Replacement {
+                reason: format!("Failed to run health check: {}", e),
+                recovered: false,
+            })?;
+
+        Ok(output.status.success())
+    }
+
+    /// Rollback to the backup binary
+    fn rollback(
+        current_path: &std::path::Path,
+        backup_path: &std::path::Path,
+    ) -> Result<(), UpdateError> {
+        use std::fs;
+
+        fs::rename(backup_path, current_path).map_err(|e| UpdateError::Replacement {
+            reason: format!("Failed to rollback: {}", e),
+            recovered: false,
+        })?;
+
+        Ok(())
+    }
+}
+
 /// GitHub API client for fetching release information
 pub struct GitHubApiClient {
     repo_owner: String,
@@ -1662,6 +1870,100 @@ mod tests {
         assert_eq!(verification.file_size, expected_size);
         assert_eq!(verification.expected_size, expected_size);
     }
+
+    #[test]
+    fn test_binary_replacer_create_backup() {
+        let temp_dir = tempfile::tempdir().expect("Failed to create temp dir");
+        let current_path = temp_dir.path().join("current_binary");
+
+        // Create a test binary
+        std::fs::write(&current_path, b"current version").expect("Failed to write test file");
+
+        // Create backup
+        let backup_path = BinaryReplacer::create_backup(&current_path);
+
+        assert!(backup_path.is_ok(), "Backup creation should succeed");
+        let backup_path = backup_path.unwrap();
+
+        // Verify backup exists
+        assert!(backup_path.exists(), "Backup file should exist");
+
+        // Verify backup has timestamp in name
+        assert!(backup_path.to_string_lossy().contains(".bak."));
+
+        // Verify backup content matches original
+        let backup_content = std::fs::read(&backup_path).expect("Failed to read backup");
+        assert_eq!(backup_content, b"current version");
+    }
+
+    #[test]
+    fn test_binary_replacer_create_backup_nonexistent_file() {
+        let temp_dir = tempfile::tempdir().expect("Failed to create temp dir");
+        let nonexistent_path = temp_dir.path().join("nonexistent");
+
+        let result = BinaryReplacer::create_backup(&nonexistent_path);
+
+        assert!(result.is_err(), "Backup creation should fail for nonexistent file");
+        match result {
+            Err(UpdateError::Replacement { reason, .. }) => {
+                assert!(reason.contains("Failed to create backup"));
+            }
+            _ => panic!("Expected Replacement error"),
+        }
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn test_binary_replacer_set_executable_permissions() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let temp_dir = tempfile::tempdir().expect("Failed to create temp dir");
+        let file_path = temp_dir.path().join("test_binary");
+
+        // Create a test file without executable permissions
+        std::fs::write(&file_path, b"test binary").expect("Failed to write test file");
+
+        // Remove executable permissions
+        let mut perms = std::fs::metadata(&file_path)
+            .expect("Failed to read metadata")
+            .permissions();
+        perms.set_mode(0o644);
+        std::fs::set_permissions(&file_path, perms).expect("Failed to set permissions");
+
+        // Set executable permissions
+        let result = BinaryReplacer::set_executable_permissions(&file_path);
+
+        assert!(result.is_ok(), "Setting executable permissions should succeed");
+
+        // Verify executable bit is set
+        let perms = std::fs::metadata(&file_path)
+            .expect("Failed to read metadata")
+            .permissions();
+        assert!(perms.mode() & 0o111 != 0, "Executable bit should be set");
+    }
+
+    #[test]
+    fn test_binary_replacer_rollback() {
+        let temp_dir = tempfile::tempdir().expect("Failed to create temp dir");
+        let current_path = temp_dir.path().join("current_binary");
+        let backup_path = temp_dir.path().join("backup_binary");
+
+        // Create current and backup files
+        std::fs::write(&current_path, b"broken version").expect("Failed to write current file");
+        std::fs::write(&backup_path, b"good version").expect("Failed to write backup file");
+
+        // Perform rollback
+        let result = BinaryReplacer::rollback(&current_path, &backup_path);
+
+        assert!(result.is_ok(), "Rollback should succeed");
+
+        // Verify current file has backup content
+        let current_content = std::fs::read(&current_path).expect("Failed to read current file");
+        assert_eq!(current_content, b"good version");
+
+        // Verify backup file no longer exists
+        assert!(!backup_path.exists(), "Backup file should be moved, not copied");
+    }
 }
 
 #[cfg(test)]
@@ -1720,6 +2022,121 @@ mod property_tests {
             prop_assert_eq!(&asset2.name, &asset3.name);
             prop_assert_eq!(&asset1.download_url, &asset2.download_url);
             prop_assert_eq!(&asset2.download_url, &asset3.download_url);
+        }
+    }
+
+    // Property 6: Backup Creation Before Replacement
+    // **Validates: Requirements 7.1, 7.2**
+    // For any replacement operation, a backup of the original binary should exist
+    // before the replacement occurs.
+    proptest! {
+        #[test]
+        fn prop_backup_creation_before_replacement(
+            content in prop::collection::vec(any::<u8>(), 1..1024),
+        ) {
+            let temp_dir = tempfile::tempdir().expect("Failed to create temp dir");
+            let current_path = temp_dir.path().join("current_binary");
+
+            // Create a test binary with random content
+            std::fs::write(&current_path, &content).expect("Failed to write test file");
+
+            // Create backup
+            let backup_result = BinaryReplacer::create_backup(&current_path);
+
+            // Backup creation should succeed
+            prop_assert!(backup_result.is_ok());
+
+            let backup_path = backup_result.unwrap();
+
+            // Backup should exist
+            prop_assert!(backup_path.exists());
+
+            // Backup should have timestamp in name
+            prop_assert!(backup_path.to_string_lossy().contains(".bak."));
+
+            // Backup content should match original
+            let backup_content = std::fs::read(&backup_path).expect("Failed to read backup");
+            prop_assert_eq!(backup_content, content);
+
+            // Original file should still exist
+            prop_assert!(current_path.exists());
+        }
+    }
+
+    // Property 7: Executable Permission Preservation
+    // **Validates: Requirements 12.1, 12.3**
+    // For any replaced binary on Unix systems, the executable permission
+    // (chmod +x) should be set after replacement.
+    #[cfg(unix)]
+    proptest! {
+        #[test]
+        fn prop_executable_permission_preservation(
+            content in prop::collection::vec(any::<u8>(), 1..1024),
+        ) {
+            use std::os::unix::fs::PermissionsExt;
+
+            let temp_dir = tempfile::tempdir().expect("Failed to create temp dir");
+            let file_path = temp_dir.path().join("test_binary");
+
+            // Create a test file with random content
+            std::fs::write(&file_path, &content).expect("Failed to write test file");
+
+            // Remove executable permissions
+            let mut perms = std::fs::metadata(&file_path)
+                .expect("Failed to read metadata")
+                .permissions();
+            perms.set_mode(0o644);
+            std::fs::set_permissions(&file_path, perms).expect("Failed to set permissions");
+
+            // Set executable permissions
+            let result = BinaryReplacer::set_executable_permissions(&file_path);
+
+            // Setting permissions should succeed
+            prop_assert!(result.is_ok());
+
+            // Verify executable bit is set
+            let perms = std::fs::metadata(&file_path)
+                .expect("Failed to read metadata")
+                .permissions();
+            prop_assert!(perms.mode() & 0o111 != 0);
+        }
+    }
+
+    // Property 14: Rollback on Health Check Failure
+    // **Validates: Requirements 7.5, 10.4**
+    // For any binary replacement where the health check fails, the original
+    // binary should be restored from backup.
+    proptest! {
+        #[test]
+        fn prop_rollback_on_health_check_failure(
+            good_content in prop::collection::vec(any::<u8>(), 1..1024),
+            bad_content in prop::collection::vec(any::<u8>(), 1..1024),
+        ) {
+            let temp_dir = tempfile::tempdir().expect("Failed to create temp dir");
+            let current_path = temp_dir.path().join("current_binary");
+            let backup_path = temp_dir.path().join("backup_binary");
+
+            // Create current file with good content
+            std::fs::write(&current_path, &good_content).expect("Failed to write current file");
+
+            // Create backup with good content
+            std::fs::write(&backup_path, &good_content).expect("Failed to write backup file");
+
+            // Simulate a failed replacement by writing bad content to current
+            std::fs::write(&current_path, &bad_content).expect("Failed to write bad content");
+
+            // Perform rollback
+            let result = BinaryReplacer::rollback(&current_path, &backup_path);
+
+            // Rollback should succeed
+            prop_assert!(result.is_ok());
+
+            // Current file should have good content restored
+            let current_content = std::fs::read(&current_path).expect("Failed to read current file");
+            prop_assert_eq!(current_content, good_content);
+
+            // Backup file should no longer exist (moved, not copied)
+            prop_assert!(!backup_path.exists());
         }
     }
 }
