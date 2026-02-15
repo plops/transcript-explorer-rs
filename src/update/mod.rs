@@ -2,6 +2,7 @@ use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use std::collections::HashSet;
 use std::path::PathBuf;
+use std::str::FromStr;
 use thiserror::Error;
 
 /// Operating system types
@@ -276,6 +277,105 @@ impl PlatformInfo {
     }
 }
 
+/// Semantic version representation (major.minor.patch)
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+pub struct SemanticVersion {
+    pub major: u32,
+    pub minor: u32,
+    pub patch: u32,
+}
+
+impl SemanticVersion {
+    /// Create a new semantic version
+    pub fn new(major: u32, minor: u32, patch: u32) -> Self {
+        Self { major, minor, patch }
+    }
+
+    /// Parse a version string in "major.minor.patch" format
+    ///
+    /// Handles optional "v" prefix (e.g., "v1.3.2" or "1.3.2")
+    ///
+    /// # Arguments
+    /// * `version_str` - Version string to parse
+    ///
+    /// # Returns
+    /// - `Ok(SemanticVersion)` if parsing succeeds
+    /// - `Err(UpdateError)` if the version format is invalid
+    ///
+    /// # Requirements
+    /// - 3.1: Parse "major.minor.patch" format
+    /// - 3.1: Handle optional "v" prefix
+    pub fn parse(version_str: &str) -> Result<Self, UpdateError> {
+        let trimmed = version_str.trim();
+        let version_part = if trimmed.starts_with('v') || trimmed.starts_with('V') {
+            &trimmed[1..]
+        } else {
+            trimmed
+        };
+
+        let parts: Vec<&str> = version_part.split('.').collect();
+        if parts.len() != 3 {
+            return Err(UpdateError::VersionParse(format!(
+                "Expected 3 version components (major.minor.patch), got {}",
+                parts.len()
+            )));
+        }
+
+        let major = parts[0].parse::<u32>().map_err(|_| {
+            UpdateError::VersionParse(format!("Invalid major version: {}", parts[0]))
+        })?;
+
+        let minor = parts[1].parse::<u32>().map_err(|_| {
+            UpdateError::VersionParse(format!("Invalid minor version: {}", parts[1]))
+        })?;
+
+        let patch = parts[2].parse::<u32>().map_err(|_| {
+            UpdateError::VersionParse(format!("Invalid patch version: {}", parts[2]))
+        })?;
+
+        Ok(SemanticVersion { major, minor, patch })
+    }
+}
+
+impl std::fmt::Display for SemanticVersion {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}.{}.{}", self.major, self.minor, self.patch)
+    }
+}
+
+impl FromStr for SemanticVersion {
+    type Err = UpdateError;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        SemanticVersion::parse(s)
+    }
+}
+
+/// Version comparator for semantic versions
+pub struct VersionComparator;
+
+impl VersionComparator {
+    /// Check if remote version is newer than local version
+    ///
+    /// Compares versions lexicographically by major, then minor, then patch.
+    /// Returns true if remote > local.
+    ///
+    /// # Arguments
+    /// * `remote` - The remote version to check
+    /// * `local` - The local version to compare against
+    ///
+    /// # Returns
+    /// - `true` if remote version is newer than local version
+    /// - `false` otherwise
+    ///
+    /// # Requirements
+    /// - 3.2: Determine if remote version is newer than local version
+    /// - 3.4: Compare versions lexicographically by major, minor, patch
+    pub fn is_newer(remote: &SemanticVersion, local: &SemanticVersion) -> bool {
+        remote > local
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -373,5 +473,176 @@ mod tests {
 
         assert_eq!(platform1, platform2);
         assert_eq!(platform2, platform3);
+    }
+
+    // Version parsing tests
+    #[test]
+    fn test_semantic_version_parse_valid() {
+        let version = SemanticVersion::parse("1.2.3").expect("Failed to parse valid version");
+        assert_eq!(version.major, 1);
+        assert_eq!(version.minor, 2);
+        assert_eq!(version.patch, 3);
+    }
+
+    #[test]
+    fn test_semantic_version_parse_with_v_prefix() {
+        let version = SemanticVersion::parse("v1.2.3").expect("Failed to parse version with v prefix");
+        assert_eq!(version.major, 1);
+        assert_eq!(version.minor, 2);
+        assert_eq!(version.patch, 3);
+    }
+
+    #[test]
+    fn test_semantic_version_parse_with_uppercase_v() {
+        let version = SemanticVersion::parse("V1.2.3").expect("Failed to parse version with V prefix");
+        assert_eq!(version.major, 1);
+        assert_eq!(version.minor, 2);
+        assert_eq!(version.patch, 3);
+    }
+
+    #[test]
+    fn test_semantic_version_parse_with_whitespace() {
+        let version = SemanticVersion::parse("  v1.2.3  ").expect("Failed to parse version with whitespace");
+        assert_eq!(version.major, 1);
+        assert_eq!(version.minor, 2);
+        assert_eq!(version.patch, 3);
+    }
+
+    #[test]
+    fn test_semantic_version_parse_zero_version() {
+        let version = SemanticVersion::parse("0.0.0").expect("Failed to parse 0.0.0");
+        assert_eq!(version.major, 0);
+        assert_eq!(version.minor, 0);
+        assert_eq!(version.patch, 0);
+    }
+
+    #[test]
+    fn test_semantic_version_parse_large_numbers() {
+        let version = SemanticVersion::parse("999.999.999").expect("Failed to parse large version");
+        assert_eq!(version.major, 999);
+        assert_eq!(version.minor, 999);
+        assert_eq!(version.patch, 999);
+    }
+
+    #[test]
+    fn test_semantic_version_parse_invalid_too_few_parts() {
+        let result = SemanticVersion::parse("1.2");
+        assert!(result.is_err());
+        match result {
+            Err(UpdateError::VersionParse(msg)) => assert!(msg.contains("3 version components")),
+            _ => panic!("Expected VersionParse error"),
+        }
+    }
+
+    #[test]
+    fn test_semantic_version_parse_invalid_too_many_parts() {
+        let result = SemanticVersion::parse("1.2.3.4");
+        assert!(result.is_err());
+        match result {
+            Err(UpdateError::VersionParse(msg)) => assert!(msg.contains("3 version components")),
+            _ => panic!("Expected VersionParse error"),
+        }
+    }
+
+    #[test]
+    fn test_semantic_version_parse_invalid_non_numeric() {
+        let result = SemanticVersion::parse("1.2.abc");
+        assert!(result.is_err());
+        match result {
+            Err(UpdateError::VersionParse(msg)) => assert!(msg.contains("Invalid patch version")),
+            _ => panic!("Expected VersionParse error"),
+        }
+    }
+
+    #[test]
+    fn test_semantic_version_parse_invalid_empty_string() {
+        let result = SemanticVersion::parse("");
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_semantic_version_display() {
+        let version = SemanticVersion::new(1, 2, 3);
+        assert_eq!(version.to_string(), "1.2.3");
+    }
+
+    #[test]
+    fn test_semantic_version_from_str() {
+        let version: SemanticVersion = "1.2.3".parse().expect("Failed to parse from str");
+        assert_eq!(version.major, 1);
+        assert_eq!(version.minor, 2);
+        assert_eq!(version.patch, 3);
+    }
+
+    // Version comparison tests
+    #[test]
+    fn test_version_comparator_is_newer_major() {
+        let remote = SemanticVersion::new(2, 0, 0);
+        let local = SemanticVersion::new(1, 9, 9);
+        assert!(VersionComparator::is_newer(&remote, &local));
+    }
+
+    #[test]
+    fn test_version_comparator_is_newer_minor() {
+        let remote = SemanticVersion::new(1, 3, 0);
+        let local = SemanticVersion::new(1, 2, 9);
+        assert!(VersionComparator::is_newer(&remote, &local));
+    }
+
+    #[test]
+    fn test_version_comparator_is_newer_patch() {
+        let remote = SemanticVersion::new(1, 2, 3);
+        let local = SemanticVersion::new(1, 2, 2);
+        assert!(VersionComparator::is_newer(&remote, &local));
+    }
+
+    #[test]
+    fn test_version_comparator_is_not_newer_equal() {
+        let remote = SemanticVersion::new(1, 2, 3);
+        let local = SemanticVersion::new(1, 2, 3);
+        assert!(!VersionComparator::is_newer(&remote, &local));
+    }
+
+    #[test]
+    fn test_version_comparator_is_not_newer_older() {
+        let remote = SemanticVersion::new(1, 2, 2);
+        let local = SemanticVersion::new(1, 2, 3);
+        assert!(!VersionComparator::is_newer(&remote, &local));
+    }
+
+    #[test]
+    fn test_version_comparator_transitivity() {
+        // If A < B and B < C, then A < C
+        let a = SemanticVersion::new(1, 0, 0);
+        let b = SemanticVersion::new(1, 1, 0);
+        let c = SemanticVersion::new(1, 2, 0);
+
+        assert!(!VersionComparator::is_newer(&a, &b)); // a < b
+        assert!(!VersionComparator::is_newer(&b, &c)); // b < c
+        assert!(!VersionComparator::is_newer(&a, &c)); // a < c (transitivity)
+    }
+
+    #[test]
+    fn test_version_comparator_current_version() {
+        // Test with current version from Cargo.toml (1.3.2)
+        let current = SemanticVersion::parse("1.3.2").expect("Failed to parse current version");
+        let newer = SemanticVersion::parse("1.3.3").expect("Failed to parse newer version");
+        let older = SemanticVersion::parse("1.3.1").expect("Failed to parse older version");
+
+        assert!(VersionComparator::is_newer(&newer, &current));
+        assert!(!VersionComparator::is_newer(&older, &current));
+        assert!(!VersionComparator::is_newer(&current, &current));
+    }
+
+    #[test]
+    fn test_semantic_version_parsing_idempotence() {
+        // Parse the same version string multiple times and verify results are identical
+        let version_str = "1.2.3";
+        let v1 = SemanticVersion::parse(version_str).expect("First parse failed");
+        let v2 = SemanticVersion::parse(version_str).expect("Second parse failed");
+        let v3 = SemanticVersion::parse(version_str).expect("Third parse failed");
+
+        assert_eq!(v1, v2);
+        assert_eq!(v2, v3);
     }
 }

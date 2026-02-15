@@ -26,8 +26,8 @@ This implementation plan breaks down the auto-update feature into discrete codin
     - **Validates: Requirements 1.1, 1.2**
     - Generate multiple detection calls, verify results are identical
 
-- [ ] 3. Implement version parsing and comparison
-  - [ ] 3.1 Implement `SemanticVersion` struct and parsing
+- [x] 3. Implement version parsing and comparison
+  - [x] 3.1 Implement `SemanticVersion` struct and parsing
     - Parse "major.minor.patch" format
     - Handle optional "v" prefix
     - Implement `Display` and `FromStr` traits
@@ -38,7 +38,7 @@ This implementation plan breaks down the auto-update feature into discrete codin
     - **Validates: Requirements 3.1**
     - Generate valid version strings, verify parsing consistency
   
-  - [ ] 3.3 Implement `VersionComparator` with comparison logic
+  - [x] 3.3 Implement `VersionComparator` with comparison logic
     - Implement `is_newer()` function
     - Compare versions lexicographically by major, minor, patch
     - _Requirements: 3.2, 3.4_

@@ -715,3 +715,23 @@ Property-based tests verify universal properties across many generated inputs:
 - Unit tests focus on specific examples and edge cases
 - Property tests focus on universal correctness across inputs
 
+## Testing Notes
+
+### Running Tests
+
+Since transcript-explorer is a binary-only project (no library target), use the following command to run tests from the project root directory:
+
+```bash
+# From project root
+cargo test --bin transcript-explorer <test_name>
+```
+
+Examples:
+- Run all tests: `cargo test --bin transcript-explorer`
+- Run specific test module: `cargo test --bin transcript-explorer update`
+- Run specific test: `cargo test --bin transcript-explorer test_semantic_version_parse_valid`
+
+**Important**: Always run cargo commands from the project root directory (where `Cargo.toml` is located).
+
+Do NOT use `cargo test --lib` as this project has no library target.
+
