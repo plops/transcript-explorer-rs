@@ -1,10 +1,10 @@
 # Package Signing Setup
 
-This document describes how package signing is configured for the transcript-explorer project using Zipsign.
+This document describes how package signing is configured for the transcript-explorer project using Zipsign with ed25519 keys.
 
 ## Overview
 
-All release packages are cryptographically signed using Zipsign (Minisign). The signature is embedded directly in the archive, and the binary verifies it using the embedded public key before installation.
+All release packages are cryptographically signed using Zipsign (ed25519-based). The signature is embedded directly in the archive, and the binary verifies it using the embedded public key before installation.
 
 ## Files
 
@@ -64,8 +64,11 @@ The `BinaryVerifier::verify_binary()` function in `src/update/mod.rs`:
 
 The public key is embedded at compile time using:
 ```rust
-let public_key: [u8; 32] = *include_bytes!("../zipsign.pub");
-zipsign::verify(path, &[public_key])?;
+let public_key_bytes: [u8; 32] = *include_bytes!("../../zipsign.pub");
+let public_key = VerifyingKey::from_bytes(&public_key_bytes)?;
+zipsign_api::verify::verify_tar(&mut reader, &[public_key], None)?;
+// or
+zipsign_api::verify::verify_zip(&mut reader, &[public_key], None)?;
 ```
 
 ## Security Benefits
@@ -75,6 +78,7 @@ zipsign::verify(path, &[public_key])?;
 - **Public key embedded in binary** - No external key distribution
 - **Prevents GitHub account compromise** - Even if GitHub account is hacked, attacker cannot sign malware without the private key
 - **Standard HTTPS + signature verification** - No need for certificate pinning
+- **Ed25519 cryptography** - Modern, fast, and secure elliptic curve signing
 
 ## Regenerating Keys
 

@@ -863,11 +863,36 @@ impl BinaryVerifier {
     /// Uses the embedded public key to verify the zipsign signature
     /// embedded in the archive.
     fn verify_signature(path: &std::path::Path) -> Result<(), UpdateError> {
+        use zipsign_api::VerifyingKey;
+        
         // Embed public key (ensure zipsign.pub is in project root)
-        let public_key: [u8; 32] = *include_bytes!("../zipsign.pub");
+        let public_key_bytes: [u8; 32] = *include_bytes!("../../zipsign.pub");
+        let public_key = VerifyingKey::from_bytes(&public_key_bytes).map_err(|e| {
+            UpdateError::Verification {
+                reason: format!("Invalid public key: {}", e),
+            }
+        })?;
 
-        // Verify the archive signature
-        zipsign::verify(path, &[public_key]).map_err(|e| {
+        // Open file for verification
+        let file = std::fs::File::open(path).map_err(|e| {
+            UpdateError::Verification {
+                reason: format!("Failed to open file for verification: {}", e),
+            }
+        })?;
+
+        // Try to verify as tar first, then as zip
+        let tar_result = zipsign_api::verify::verify_tar(&mut std::io::BufReader::new(file.try_clone().unwrap_or_else(|_| file)), &[public_key], None);
+        if tar_result.is_ok() {
+            return Ok(());
+        }
+
+        let file = std::fs::File::open(path).map_err(|e| {
+            UpdateError::Verification {
+                reason: format!("Failed to open file for verification: {}", e),
+            }
+        })?;
+        let zip_result = zipsign_api::verify::verify_zip(&mut std::io::BufReader::new(file), &[public_key], None);
+        zip_result.map_err(|e| {
             UpdateError::Verification {
                 reason: format!("Signature verification failed: {}", e),
             }
