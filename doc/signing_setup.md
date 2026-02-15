@@ -16,32 +16,32 @@ All release packages are cryptographically signed using Zipsign (ed25519-based).
 
 The following secrets must be added to your GitHub repository:
 
-### ZIPSIGN_PRIV_KEY
+### ZIPSIGN_PRIV_KEY (Required)
 
 Base64-encoded private key. This is used by CI to sign packages during release.
 
-**Current value (Base64):**
-```
-KynEV/DrEfBtaGiY7sTb3vPUz2TOXUSw
-crv1JyMUeZ8RcFGVUsDpmFS04VLpaO3owoaTiQE6iSA/d12q4XLbeQ==
-```
+**To generate and add to GitHub:**
+1. Generate the Base64 encoded key locally:
+   ```bash
+   base64 -w0 secrets/zipsign.priv && echo ""
+   ```
+2. Go to your GitHub Repo → Settings → Secrets and variables → Actions
+3. Click "New repository secret"
+4. Name: `ZIPSIGN_PRIV_KEY`
+5. Value: Paste the Base64 output from step 1
+6. Click "Add secret"
 
-**To add to GitHub:**
-1. Go to your GitHub Repo → Settings → Secrets and variables → Actions
-2. Click "New repository secret"
-3. Name: `ZIPSIGN_PRIV_KEY`
-4. Value: Paste the Base64 string above
-5. Click "Add secret"
+**IMPORTANT:** Never commit or share the private key. Only store it in GitHub Secrets.
 
-### ZIPSIGN_PASSWORD
+### ZIPSIGN_PASSWORD (Optional)
 
-The password used when generating the keypair (if any). If no password was used, this can be left empty or set to an empty string.
+The password used when generating the keypair (if any). Only add this secret if you used a password when generating the keys.
 
-**To add to GitHub:**
+**To add to GitHub (only if you used a password):**
 1. Go to your GitHub Repo → Settings → Secrets and variables → Actions
 2. Click "New repository secret"
 3. Name: `ZIPSIGN_PASSWORD`
-4. Value: (leave empty if no password was used)
+4. Value: The password you used when generating the key
 5. Click "Add secret"
 
 ## CI/CD Integration

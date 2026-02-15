@@ -67,8 +67,6 @@ jobs:
             zipsign sign tar "${{ matrix.asset_name }}.tar.gz" zipsign.priv
             rm zipsign.priv
           fi
-        env:
-          ZIPSIGN_PASSWORD: ${{ secrets.ZIPSIGN_PASSWORD }}
 
       - name: Upload assets to release
         uses: softprops/action-gh-release@v2
