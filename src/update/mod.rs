@@ -395,6 +395,56 @@ struct GitHubAssetResponse {
     created_at: DateTime<Utc>,
 }
 
+/// Asset selector for matching platform/architecture to release assets
+pub struct AssetSelector;
+
+impl AssetSelector {
+    /// Select the best matching asset for the given platform
+    ///
+    /// Builds expected asset name patterns for the platform/architecture,
+    /// searches for exact matches in available assets, and prioritizes
+    /// platform-specific assets over generic ones.
+    ///
+    /// # Arguments
+    /// * `platform` - The target platform information
+    /// * `assets` - Available release assets to search
+    ///
+    /// # Returns
+    /// - `Ok(ReleaseAsset)` if a matching asset is found
+    /// - `Err(UpdateError)` if no matching asset exists
+    ///
+    /// # Requirements
+    /// - 4.1: Identify all available binary assets for the release
+    /// - 4.2: Match current platform and architecture to available assets
+    /// - 4.3: Extract download URL and asset metadata
+    /// - 4.1, 4.2, 4.3: Select most specific match (platform-specific over generic)
+    pub fn select_asset(
+        platform: &PlatformInfo,
+        assets: &[ReleaseAsset],
+    ) -> Result<ReleaseAsset, UpdateError> {
+        if assets.is_empty() {
+            return Err(UpdateError::AssetNotFound(
+                "No assets available in release".to_string(),
+            ));
+        }
+
+        let pattern = platform.asset_pattern();
+
+        // First, try to find an exact match with the platform pattern
+        for asset in assets {
+            if asset.name.contains(&pattern) {
+                return Ok(asset.clone());
+            }
+        }
+
+        // If no exact match found, return error
+        Err(UpdateError::AssetNotFound(format!(
+            "No asset found matching pattern: {}",
+            pattern
+        )))
+    }
+}
+
 /// GitHub API client for fetching release information
 pub struct GitHubApiClient {
     repo_owner: String,
@@ -894,5 +944,230 @@ mod tests {
         };
 
         assert_eq!(version, "1.3.2");
+    }
+
+    // Asset selector tests
+    #[test]
+    fn test_asset_selector_exact_match_linux_x86_64() {
+        let platform = PlatformInfo {
+            os: OperatingSystem::Linux,
+            arch: Architecture::X86_64,
+        };
+
+        let assets = vec![
+            ReleaseAsset {
+                name: "transcript-explorer-linux-x86_64".to_string(),
+                download_url: "https://example.com/linux-x86_64".to_string(),
+                size: 1024000,
+                created_at: Utc::now(),
+            },
+            ReleaseAsset {
+                name: "transcript-explorer-macos-x86_64".to_string(),
+                download_url: "https://example.com/macos-x86_64".to_string(),
+                size: 1024000,
+                created_at: Utc::now(),
+            },
+        ];
+
+        let result = AssetSelector::select_asset(&platform, &assets);
+        assert!(result.is_ok());
+        let selected = result.unwrap();
+        assert_eq!(selected.name, "transcript-explorer-linux-x86_64");
+    }
+
+    #[test]
+    fn test_asset_selector_exact_match_macos_aarch64() {
+        let platform = PlatformInfo {
+            os: OperatingSystem::MacOS,
+            arch: Architecture::Aarch64,
+        };
+
+        let assets = vec![
+            ReleaseAsset {
+                name: "transcript-explorer-linux-x86_64".to_string(),
+                download_url: "https://example.com/linux-x86_64".to_string(),
+                size: 1024000,
+                created_at: Utc::now(),
+            },
+            ReleaseAsset {
+                name: "transcript-explorer-macos-aarch64".to_string(),
+                download_url: "https://example.com/macos-aarch64".to_string(),
+                size: 1024000,
+                created_at: Utc::now(),
+            },
+        ];
+
+        let result = AssetSelector::select_asset(&platform, &assets);
+        assert!(result.is_ok());
+        let selected = result.unwrap();
+        assert_eq!(selected.name, "transcript-explorer-macos-aarch64");
+    }
+
+    #[test]
+    fn test_asset_selector_exact_match_windows_x86_64() {
+        let platform = PlatformInfo {
+            os: OperatingSystem::Windows,
+            arch: Architecture::X86_64,
+        };
+
+        let assets = vec![
+            ReleaseAsset {
+                name: "transcript-explorer-windows-x86_64.exe".to_string(),
+                download_url: "https://example.com/windows-x86_64.exe".to_string(),
+                size: 1024000,
+                created_at: Utc::now(),
+            },
+            ReleaseAsset {
+                name: "transcript-explorer-linux-x86_64".to_string(),
+                download_url: "https://example.com/linux-x86_64".to_string(),
+                size: 1024000,
+                created_at: Utc::now(),
+            },
+        ];
+
+        let result = AssetSelector::select_asset(&platform, &assets);
+        assert!(result.is_ok());
+        let selected = result.unwrap();
+        assert_eq!(selected.name, "transcript-explorer-windows-x86_64.exe");
+    }
+
+    #[test]
+    fn test_asset_selector_no_matching_asset() {
+        let platform = PlatformInfo {
+            os: OperatingSystem::Linux,
+            arch: Architecture::X86_64,
+        };
+
+        let assets = vec![
+            ReleaseAsset {
+                name: "transcript-explorer-macos-x86_64".to_string(),
+                download_url: "https://example.com/macos-x86_64".to_string(),
+                size: 1024000,
+                created_at: Utc::now(),
+            },
+            ReleaseAsset {
+                name: "transcript-explorer-windows-x86_64.exe".to_string(),
+                download_url: "https://example.com/windows-x86_64.exe".to_string(),
+                size: 1024000,
+                created_at: Utc::now(),
+            },
+        ];
+
+        let result = AssetSelector::select_asset(&platform, &assets);
+        assert!(result.is_err());
+        match result {
+            Err(UpdateError::AssetNotFound(msg)) => {
+                assert!(msg.contains("linux-x86_64"));
+            }
+            _ => panic!("Expected AssetNotFound error"),
+        }
+    }
+
+    #[test]
+    fn test_asset_selector_empty_assets() {
+        let platform = PlatformInfo {
+            os: OperatingSystem::Linux,
+            arch: Architecture::X86_64,
+        };
+
+        let assets = vec![];
+
+        let result = AssetSelector::select_asset(&platform, &assets);
+        assert!(result.is_err());
+        match result {
+            Err(UpdateError::AssetNotFound(msg)) => {
+                assert!(msg.contains("No assets available"));
+            }
+            _ => panic!("Expected AssetNotFound error"),
+        }
+    }
+
+    #[test]
+    fn test_asset_selector_multiple_assets_selects_first_match() {
+        let platform = PlatformInfo {
+            os: OperatingSystem::Linux,
+            arch: Architecture::X86_64,
+        };
+
+        let assets = vec![
+            ReleaseAsset {
+                name: "transcript-explorer-linux-x86_64-v1".to_string(),
+                download_url: "https://example.com/linux-x86_64-v1".to_string(),
+                size: 1024000,
+                created_at: Utc::now(),
+            },
+            ReleaseAsset {
+                name: "transcript-explorer-linux-x86_64-v2".to_string(),
+                download_url: "https://example.com/linux-x86_64-v2".to_string(),
+                size: 1024000,
+                created_at: Utc::now(),
+            },
+        ];
+
+        let result = AssetSelector::select_asset(&platform, &assets);
+        assert!(result.is_ok());
+        let selected = result.unwrap();
+        // Should select the first matching asset
+        assert_eq!(selected.name, "transcript-explorer-linux-x86_64-v1");
+    }
+}
+
+#[cfg(test)]
+mod property_tests {
+    use super::*;
+    use proptest::prelude::*;
+
+    // Property 4: Asset Selection Determinism
+    // **Validates: Requirements 4.1, 4.2, 4.3**
+    // For any platform/asset combination, selecting an asset multiple times
+    // should return the same asset.
+    proptest! {
+        #[test]
+        fn prop_asset_selection_determinism(
+            os in prop_oneof![
+                Just(OperatingSystem::Linux),
+                Just(OperatingSystem::MacOS),
+                Just(OperatingSystem::Windows),
+            ],
+            arch in prop_oneof![
+                Just(Architecture::X86_64),
+                Just(Architecture::Aarch64),
+            ],
+            asset_names in prop::collection::vec("[a-z0-9_-]+", 1..5),
+        ) {
+            let platform = PlatformInfo { os, arch };
+            let pattern = platform.asset_pattern();
+
+            // Create assets with the pattern in their names
+            let assets: Vec<ReleaseAsset> = asset_names
+                .iter()
+                .map(|name| ReleaseAsset {
+                    name: format!("transcript-explorer-{}-{}", pattern, name),
+                    download_url: format!("https://example.com/{}", name),
+                    size: 1024000,
+                    created_at: Utc::now(),
+                })
+                .collect();
+
+            // Select asset multiple times
+            let selection1 = AssetSelector::select_asset(&platform, &assets);
+            let selection2 = AssetSelector::select_asset(&platform, &assets);
+            let selection3 = AssetSelector::select_asset(&platform, &assets);
+
+            // All selections should succeed
+            prop_assert!(selection1.is_ok());
+            prop_assert!(selection2.is_ok());
+            prop_assert!(selection3.is_ok());
+
+            // All selections should return the same asset
+            let asset1 = selection1.unwrap();
+            let asset2 = selection2.unwrap();
+            let asset3 = selection3.unwrap();
+
+            prop_assert_eq!(&asset1.name, &asset2.name);
+            prop_assert_eq!(&asset2.name, &asset3.name);
+            prop_assert_eq!(&asset1.download_url, &asset2.download_url);
+            prop_assert_eq!(&asset2.download_url, &asset3.download_url);
+        }
     }
 }

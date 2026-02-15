@@ -66,14 +66,14 @@ This implementation plan breaks down the auto-update feature into discrete codin
     - **Validates: Requirements 2.3**
     - Generate API requests, verify User-Agent header present
 
-- [ ] 5. Implement asset selection
+- [-] 5. Implement asset selection
   - [ ] 5.1 Implement `AssetSelector` with platform matching
     - Build expected asset name patterns for platform/architecture
     - Search for exact matches in available assets
     - Prioritize platform-specific assets
     - _Requirements: 4.1, 4.2, 4.3_
   
-  - [ ]* 5.2 Write property test for asset selection determinism
+  - [x] 5.2 Write property test for asset selection determinism
     - **Property 4: Asset Selection Determinism**
     - **Validates: Requirements 4.1, 4.2, 4.3**
     - Generate platform/asset combinations, verify deterministic selection
