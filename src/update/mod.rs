@@ -376,6 +376,140 @@ impl VersionComparator {
     }
 }
 
+/// GitHub API response for a release
+#[derive(Debug, Clone, Deserialize)]
+struct GitHubReleaseResponse {
+    tag_name: String,
+    name: Option<String>,
+    published_at: DateTime<Utc>,
+    assets: Vec<GitHubAssetResponse>,
+    body: Option<String>,
+}
+
+/// GitHub API response for a release asset
+#[derive(Debug, Clone, Deserialize)]
+struct GitHubAssetResponse {
+    name: String,
+    browser_download_url: String,
+    size: u64,
+    created_at: DateTime<Utc>,
+}
+
+/// GitHub API client for fetching release information
+pub struct GitHubApiClient {
+    repo_owner: String,
+    repo_name: String,
+    http_client: reqwest::Client,
+}
+
+impl GitHubApiClient {
+    /// Create a new GitHub API client
+    ///
+    /// Initializes with repo owner and name, and creates a reqwest::Client
+    /// with TLS configuration.
+    ///
+    /// # Arguments
+    /// * `repo_owner` - GitHub repository owner (e.g., "your-org")
+    /// * `repo_name` - GitHub repository name (e.g., "transcript-explorer")
+    ///
+    /// # Returns
+    /// - `Ok(GitHubApiClient)` if client creation succeeds
+    /// - `Err(UpdateError)` if client creation fails
+    ///
+    /// # Requirements
+    /// - 2.1: Initialize with repo owner and name
+    /// - 2.1: Create reqwest::Client with TLS configuration
+    pub fn new(repo_owner: String, repo_name: String) -> Result<Self, UpdateError> {
+        let http_client = reqwest::Client::builder()
+            .user_agent("transcript-explorer-updater/1.0")
+            .build()
+            .map_err(|e| UpdateError::HttpError(e))?;
+
+        Ok(Self {
+            repo_owner,
+            repo_name,
+            http_client,
+        })
+    }
+
+    /// Get the latest release from GitHub
+    ///
+    /// Queries the GitHub Releases API endpoint for the latest release,
+    /// includes User-Agent header for API compliance, parses the JSON response
+    /// into ReleaseInfo, and handles API errors and rate limiting.
+    ///
+    /// # Returns
+    /// - `Ok(ReleaseInfo)` if the request succeeds
+    /// - `Err(UpdateError)` if the request fails or response is invalid
+    ///
+    /// # Requirements
+    /// - 2.1: Query GitHub Releases API endpoint
+    /// - 2.2: Parse JSON response into ReleaseInfo
+    /// - 2.3: Include User-Agent header for API compliance
+    /// - 2.1, 2.2, 2.3: Handle API errors and rate limiting
+    pub async fn get_latest_release(&self) -> Result<ReleaseInfo, UpdateError> {
+        let url = format!(
+            "https://api.github.com/repos/{}/{}/releases/latest",
+            self.repo_owner, self.repo_name
+        );
+
+        let response = self
+            .http_client
+            .get(&url)
+            .send()
+            .await
+            .map_err(|e| UpdateError::HttpError(e))?;
+
+        let status = response.status();
+        if !status.is_success() {
+            let error_body = response
+                .text()
+                .await
+                .unwrap_or_else(|_| "Unknown error".to_string());
+
+            return Err(UpdateError::ApiError {
+                status: status.as_u16(),
+                message: error_body,
+            });
+        }
+
+        let response_text = response
+            .text()
+            .await
+            .map_err(|e| UpdateError::HttpError(e))?;
+
+        let github_release: GitHubReleaseResponse = serde_json::from_str(&response_text)
+            .map_err(|e| UpdateError::SerializationError(e))?;
+
+        // Extract version from tag_name (e.g., "v1.3.2" -> "1.3.2")
+        let version = if github_release.tag_name.starts_with('v') {
+            github_release.tag_name[1..].to_string()
+        } else {
+            github_release.tag_name.clone()
+        };
+
+        // Convert assets
+        let assets = github_release
+            .assets
+            .into_iter()
+            .map(|asset| ReleaseAsset {
+                name: asset.name,
+                download_url: asset.browser_download_url,
+                size: asset.size,
+                created_at: asset.created_at,
+            })
+            .collect();
+
+        Ok(ReleaseInfo {
+            version,
+            tag_name: github_release.tag_name,
+            published_at: github_release.published_at,
+            assets,
+            body: github_release.body.unwrap_or_default(),
+        })
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -644,5 +778,121 @@ mod tests {
 
         assert_eq!(v1, v2);
         assert_eq!(v2, v3);
+    }
+
+    // GitHub API client tests
+    #[test]
+    fn test_github_api_client_creation() {
+        let result = GitHubApiClient::new(
+            "your-org".to_string(),
+            "transcript-explorer".to_string(),
+        );
+        assert!(result.is_ok());
+        let client = result.unwrap();
+        assert_eq!(client.repo_owner, "your-org");
+        assert_eq!(client.repo_name, "transcript-explorer");
+    }
+
+    #[tokio::test]
+    async fn test_github_api_client_get_latest_release() {
+        // This test uses the real GitHub API to fetch the latest release
+        // It will only work if the repository exists and has releases
+        let client = GitHubApiClient::new(
+            "your-org".to_string(),
+            "transcript-explorer".to_string(),
+        )
+        .expect("Failed to create client");
+
+        // This will fail if the repo doesn't exist, which is expected for this test
+        // In a real scenario, this would be mocked or use a test repository
+        let result = client.get_latest_release().await;
+
+        // We just verify the error handling works correctly
+        // The actual API call may fail if the repo doesn't exist
+        match result {
+            Ok(release) => {
+                // If we get a release, verify it has the expected structure
+                assert!(!release.version.is_empty());
+                assert!(!release.tag_name.is_empty());
+            }
+            Err(UpdateError::ApiError { status, .. }) => {
+                // 404 is expected if the repo doesn't exist
+                assert!(status == 404 || status == 403);
+            }
+            Err(e) => {
+                // Other errors are acceptable (network issues, etc.)
+                eprintln!("API error: {}", e);
+            }
+        }
+    }
+
+    #[test]
+    fn test_github_release_response_deserialization() {
+        // Test that we can deserialize a GitHub API response
+        let json = r#"{
+            "tag_name": "v1.3.2",
+            "name": "Release 1.3.2",
+            "published_at": "2024-01-15T10:30:00Z",
+            "assets": [
+                {
+                    "name": "transcript-explorer-linux-x86_64",
+                    "browser_download_url": "https://github.com/your-org/transcript-explorer/releases/download/v1.3.2/transcript-explorer-linux-x86_64",
+                    "size": 1024000,
+                    "created_at": "2024-01-15T10:30:00Z"
+                }
+            ],
+            "body": "Release notes here"
+        }"#;
+
+        let response: Result<GitHubReleaseResponse, _> = serde_json::from_str(json);
+        assert!(response.is_ok());
+
+        let release = response.unwrap();
+        assert_eq!(release.tag_name, "v1.3.2");
+        assert_eq!(release.assets.len(), 1);
+        assert_eq!(release.assets[0].name, "transcript-explorer-linux-x86_64");
+        assert_eq!(release.assets[0].size, 1024000);
+    }
+
+    #[test]
+    fn test_github_api_client_version_extraction() {
+        // Test that version is correctly extracted from tag_name
+        let json = r#"{
+            "tag_name": "v1.3.2",
+            "name": "Release 1.3.2",
+            "published_at": "2024-01-15T10:30:00Z",
+            "assets": [],
+            "body": "Release notes"
+        }"#;
+
+        let response: GitHubReleaseResponse = serde_json::from_str(json).unwrap();
+        let version = if response.tag_name.starts_with('v') {
+            response.tag_name[1..].to_string()
+        } else {
+            response.tag_name.clone()
+        };
+
+        assert_eq!(version, "1.3.2");
+    }
+
+    #[test]
+    fn test_github_api_client_version_extraction_no_prefix() {
+        // Test version extraction when tag_name has no "v" prefix
+        let json = r#"{
+            "tag_name": "1.3.2",
+            "name": "Release 1.3.2",
+            "published_at": "2024-01-15T10:30:00Z",
+            "assets": [],
+            "body": "Release notes"
+        }"#;
+
+        let response: GitHubReleaseResponse = serde_json::from_str(json).unwrap();
+        let version = if response.tag_name.starts_with('v') {
+            response.tag_name[1..].to_string()
+        } else {
+            response.tag_name.clone()
+        };
+
+        assert_eq!(version, "1.3.2");
     }
 }

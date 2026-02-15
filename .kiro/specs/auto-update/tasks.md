@@ -48,13 +48,13 @@ This implementation plan breaks down the auto-update feature into discrete codin
     - **Validates: Requirements 3.2**
     - Generate version triples, verify transitivity holds
 
-- [ ] 4. Implement GitHub API client
-  - [ ] 4.1 Create `GitHubApiClient` struct
+- [x] 4. Implement GitHub API client
+  - [x] 4.1 Create `GitHubApiClient` struct
     - Initialize with repo owner and name
     - Create `reqwest::Client` with TLS configuration
     - _Requirements: 2.1_
   
-  - [ ] 4.2 Implement `get_latest_release()` method
+  - [x] 4.2 Implement `get_latest_release()` method
     - Query GitHub Releases API endpoint
     - Include User-Agent header for API compliance
     - Parse JSON response into `ReleaseInfo`
