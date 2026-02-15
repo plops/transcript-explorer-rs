@@ -1,4 +1,4 @@
-use crossterm::event::KeyCode;
+use crossterm::event::{KeyCode, KeyModifiers};
 use ratatui::prelude::*;
 use ratatui::widgets::{Block, Borders, Clear, Paragraph};
 
@@ -165,7 +165,7 @@ mod tests {
     fn test_password_input_overlay_char_input() {
         let mut overlay = PasswordInputOverlay::new("Enter password:".to_string());
 
-        let key = crossterm::event::KeyEvent::new(KeyCode::Char('a'), Default::default());
+        let key = crossterm::event::KeyEvent::new(KeyCode::Char('a'), KeyModifiers::empty());
         let result = overlay.handle_key(key);
 
         assert!(result.is_none());
@@ -178,7 +178,7 @@ mod tests {
 
         overlay.password = "abc".to_string();
 
-        let key = crossterm::event::KeyEvent::new(KeyCode::Backspace, Default::default());
+        let key = crossterm::event::KeyEvent::new(KeyCode::Backspace, KeyModifiers::empty());
         let result = overlay.handle_key(key);
 
         assert!(result.is_none());
@@ -190,7 +190,7 @@ mod tests {
         let mut overlay = PasswordInputOverlay::new("Enter password:".to_string());
         overlay.password = "mypassword".to_string();
 
-        let key = crossterm::event::KeyEvent::new(KeyCode::Enter, Default::default());
+        let key = crossterm::event::KeyEvent::new(KeyCode::Enter, KeyModifiers::empty());
         let result = overlay.handle_key(key);
 
         assert!(result.is_some());
@@ -204,7 +204,7 @@ mod tests {
     fn test_password_input_overlay_enter_without_password() {
         let mut overlay = PasswordInputOverlay::new("Enter password:".to_string());
 
-        let key = crossterm::event::KeyEvent::new(KeyCode::Enter, Default::default());
+        let key = crossterm::event::KeyEvent::new(KeyCode::Enter, KeyModifiers::empty());
         let result = overlay.handle_key(key);
 
         assert!(result.is_none());
@@ -215,7 +215,7 @@ mod tests {
         let mut overlay = PasswordInputOverlay::new("Enter password:".to_string());
         overlay.password = "mypassword".to_string();
 
-        let key = crossterm::event::KeyEvent::new(KeyCode::Esc, Default::default());
+        let key = crossterm::event::KeyEvent::new(KeyCode::Esc, KeyModifiers::empty());
         let result = overlay.handle_key(key);
 
         assert!(result.is_some());

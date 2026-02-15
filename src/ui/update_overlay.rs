@@ -14,6 +14,7 @@ pub enum UpdateState {
     Downloading,
     Installing,
     Complete,
+    UpToDate,
     Error,
     Skipped,
 }
@@ -97,9 +98,9 @@ impl UpdateOverlayState {
                 self.state = UpdateState::Checking;
             }
             UpdateMessage::UpToDate { current_version } => {
-                self.state = UpdateState::Idle;
+                self.state = UpdateState::UpToDate;
                 self.current_version = Some(current_version);
-                self.visible = false; // Auto-hide if up to date
+                self.visible = true; // Show the up-to-date message
             }
             UpdateMessage::UpdateAvailable {
                 current_version,
@@ -179,7 +180,7 @@ impl UpdateOverlayState {
                 }
                 _ => false,
             },
-            UpdateState::Complete | UpdateState::Skipped => {
+            UpdateState::Complete | UpdateState::Skipped | UpdateState::UpToDate => {
                 // Any key dismisses
                 self.visible = false;
                 self.send_response(UserResponse::Dismissed);
@@ -339,8 +340,8 @@ mod tests {
             tx,
         );
 
-        assert!(!state.is_visible()); // Auto-hide
-        assert_eq!(state.state(), UpdateState::Idle);
+        assert!(state.is_visible()); // Now visible
+        assert_eq!(state.state(), UpdateState::UpToDate);
         assert_eq!(state.current_version(), Some("1.0.0"));
     }
 
@@ -514,6 +515,7 @@ pub fn render(state: &UpdateOverlayState, frame: &mut Frame) {
         UpdateState::Downloading => render_downloading(state, frame, area),
         UpdateState::Installing => render_installing(frame, area),
         UpdateState::Complete => render_complete(state, frame, area),
+        UpdateState::UpToDate => render_up_to_date(state, frame, area),
         UpdateState::Error => render_error(state, frame, area),
         UpdateState::Skipped => render_skipped(state, frame, area),
         UpdateState::Idle => {}
@@ -687,6 +689,30 @@ fn render_complete(state: &UpdateOverlayState, frame: &mut Frame, area: Rect) {
         Line::from(format!("Successfully updated to version {}", new)),
         Line::from(""),
         Line::from("Please restart the application."),
+        Line::from(""),
+        Line::from("Press any key to dismiss"),
+    ];
+
+    let paragraph = Paragraph::new(text)
+        .block(block)
+        .alignment(Alignment::Center);
+
+    frame.render_widget(paragraph, area);
+}
+
+/// Render up-to-date state
+fn render_up_to_date(state: &UpdateOverlayState, frame: &mut Frame, area: Rect) {
+    let block = Block::default()
+        .title("Application Status")
+        .borders(Borders::ALL)
+        .border_style(Style::default().fg(Color::Green));
+
+    let current = state.current_version().unwrap_or("unknown");
+
+    let text = vec![
+        Line::from(format!("Version {} is up to date", current)),
+        Line::from(""),
+        Line::from("No updates available."),
         Line::from(""),
         Line::from("Press any key to dismiss"),
     ];

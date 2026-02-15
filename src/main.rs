@@ -225,7 +225,22 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     password_result.unwrap_or_default()
                 };
                 
-                eprintln!("Decrypting to temporary file...");
+                // Show decryption status in the overlay
+                terminal.draw(|frame| {
+                    let area = frame.size();
+                    let block = ratatui::widgets::Block::default()
+                        .title("Decrypting Database")
+                        .borders(ratatui::widgets::Borders::ALL)
+                        .border_style(ratatui::style::Style::default().fg(ratatui::style::Color::Cyan));
+                    
+                    let text = ratatui::widgets::Paragraph::new("Decrypting to temporary file...")
+                        .block(block)
+                        .alignment(ratatui::layout::Alignment::Center);
+                    
+                    frame.render_widget(ratatui::widgets::Clear, area);
+                    frame.render_widget(text, area);
+                })?;
+                
                 let temp = tempfile::NamedTempFile::new()?;
                 
                 match codec::decrypt_stream(&db_path, temp.path(), Secret::new(password.clone())) {

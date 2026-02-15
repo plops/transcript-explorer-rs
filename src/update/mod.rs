@@ -1753,6 +1753,7 @@ pub struct UpdateManager {
     lock_manager: LockFileManager,
     bad_version_tracker: BadVersionTracker,
     error_handler: ErrorHandler,
+    tui_channels: Option<messages::UpdateThreadChannels>,
 }
 
 impl UpdateManager {
@@ -1785,6 +1786,7 @@ impl UpdateManager {
             lock_manager,
             bad_version_tracker,
             error_handler,
+            tui_channels: None,
         })
     }
 
@@ -1816,7 +1818,7 @@ impl UpdateManager {
         let error_handler = ErrorHandler::new();
 
         // Create TUI mode handler
-        let _tui_handler = TuiModeHandler::new(channels, config.interactive_mode);
+        let _tui_handler = TuiModeHandler::new(channels.clone(), config.interactive_mode);
 
         Ok(Self {
             config,
@@ -1824,6 +1826,7 @@ impl UpdateManager {
             lock_manager,
             bad_version_tracker,
             error_handler,
+            tui_channels: Some(channels),
         })
     }
 
@@ -1994,8 +1997,9 @@ impl UpdateManager {
     /// // Main application continues while update check runs in background
     /// ```
     pub fn spawn_background_thread(&self) -> std::thread::JoinHandle<()> {
-        // Clone configuration for the thread
+        // Clone configuration and channels for the thread
         let config = self.config.clone();
+        let tui_channels = self.tui_channels.clone();
 
         // Spawn a new thread
         std::thread::spawn(move || {
@@ -2010,32 +2014,76 @@ impl UpdateManager {
 
             // Run the update check in the thread's runtime
             rt.block_on(async {
-                // Create a new UpdateManager in the thread
-                match UpdateManager::new(config) {
-                    Ok(manager) => {
-                        // Perform the update check
-                        match manager.check_and_update().await {
-                            Ok(result) => {
-                                // Log the result
-                                match result {
-                                    UpdateResult::Updated { new_version } => {
-                                        eprintln!("Update completed: new version {} installed", new_version);
-                                    }
-                                    UpdateResult::UpToDate => {
-                                        eprintln!("Application is up to date");
-                                    }
-                                    UpdateResult::Skipped { reason } => {
-                                        eprintln!("Update skipped: {}", reason);
+                // If we have TUI channels, use TUI mode; otherwise use console mode
+                if let Some(channels) = tui_channels {
+                    // TUI mode - send messages instead of printing
+                    match UpdateManager::new_with_tui_mode(config, channels.clone()) {
+                        Ok(manager) => {
+                            match manager.check_and_update().await {
+                                Ok(result) => {
+                                    // Send result as message
+                                    match result {
+                                        UpdateResult::Updated { new_version } => {
+                                            let _ = channels.message_tx.send(
+                                                UpdateMessage::InstallComplete { new_version }
+                                            );
+                                        }
+                                        UpdateResult::UpToDate => {
+                                            // Send UpToDate message
+                                            if let Some(current_version) = std::env::var("CARGO_PKG_VERSION").ok() {
+                                                let _ = channels.message_tx.send(
+                                                    UpdateMessage::UpToDate { current_version }
+                                                );
+                                            }
+                                        }
+                                        UpdateResult::Skipped { reason } => {
+                                            let _ = channels.message_tx.send(
+                                                UpdateMessage::Skipped { reason }
+                                            );
+                                        }
                                     }
                                 }
-                            }
-                            Err(e) => {
-                                eprintln!("Background update check failed: {}", e.user_message());
+                                Err(e) => {
+                                    let _ = channels.message_tx.send(
+                                        UpdateMessage::Error {
+                                            message: e.user_message(),
+                                            recovery_instructions: None,
+                                            is_retryable: false,
+                                        }
+                                    );
+                                }
                             }
                         }
+                        Err(e) => {
+                            eprintln!("Failed to initialize UpdateManager in TUI mode: {}", e.user_message());
+                        }
                     }
-                    Err(e) => {
-                        eprintln!("Failed to initialize UpdateManager in background thread: {}", e.user_message());
+                } else {
+                    // Console mode - use old behavior
+                    match UpdateManager::new(config) {
+                        Ok(manager) => {
+                            match manager.check_and_update().await {
+                                Ok(result) => {
+                                    match result {
+                                        UpdateResult::Updated { new_version } => {
+                                            eprintln!("Update completed: new version {} installed", new_version);
+                                        }
+                                        UpdateResult::UpToDate => {
+                                            eprintln!("Application is up to date");
+                                        }
+                                        UpdateResult::Skipped { reason } => {
+                                            eprintln!("Update skipped: {}", reason);
+                                        }
+                                    }
+                                }
+                                Err(e) => {
+                                    eprintln!("Background update check failed: {}", e.user_message());
+                                }
+                            }
+                        }
+                        Err(e) => {
+                            eprintln!("Failed to initialize UpdateManager in background thread: {}", e.user_message());
+                        }
                     }
                 }
             });

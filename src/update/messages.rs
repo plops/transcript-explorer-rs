@@ -168,7 +168,7 @@ mod tests {
 
         // Receive response on update thread
         assert!(matches!(
-            update_channels.response_rx.recv(),
+            update_channels.response_rx.lock().unwrap().recv(),
             Ok(UserResponse::Confirmed)
         ));
     }
