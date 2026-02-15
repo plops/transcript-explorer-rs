@@ -202,6 +202,27 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             let mut app = App::new(database);
             app.init().await?;
 
+            // Spawn background update thread
+            let _update_thread = {
+                match update::UpdateConfiguration::load() {
+                    Ok(config) => {
+                        match update::UpdateManager::new(config) {
+                            Ok(manager) => {
+                                Some(manager.spawn_background_thread())
+                            }
+                            Err(e) => {
+                                eprintln!("Warning: Failed to initialize update manager: {}", e.user_message());
+                                None
+                            }
+                        }
+                    }
+                    Err(e) => {
+                        eprintln!("Warning: Failed to load update configuration: {}", e.user_message());
+                        None
+                    }
+                }
+            };
+
             // Init terminal
             let mut terminal = ratatui::init();
 

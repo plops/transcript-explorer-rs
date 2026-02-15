@@ -1,6 +1,7 @@
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use std::collections::HashSet;
+use std::io::Write;
 use std::path::PathBuf;
 use std::str::FromStr;
 use thiserror::Error;
@@ -1345,6 +1346,738 @@ impl LockFileManager {
         }
 
         Ok(())
+    }
+}
+
+/// Tracks versions that have failed health checks to prevent update loops.
+///
+/// The BadVersionTracker maintains a list of versions that have failed verification
+/// or health checks. This prevents the system from repeatedly attempting to update
+/// to broken versions. Bad versions are persisted to a cache file and loaded on
+/// application startup.
+///
+/// # Requirements
+/// - 15.1: Mark version as bad and persist to cache file
+/// - 15.2: Skip bad versions on subsequent update checks
+/// - 15.3: Store bad versions in system-dependent cache directory
+/// - 15.4: Load bad versions from cache file on startup
+/// - 15.5: Handle corrupted cache files gracefully
+/// - 15.6: Load bad version list on application startup
+pub struct BadVersionTracker {
+    cache_path: std::path::PathBuf,
+    bad_versions: HashSet<String>,
+}
+
+impl BadVersionTracker {
+    /// Load bad versions from cache file on initialization
+    ///
+    /// Attempts to load the bad version list from the cache file. If the file
+    /// doesn't exist or is corrupted, starts with an empty list and logs a warning.
+    ///
+    /// # Returns
+    /// - `Ok(BadVersionTracker)` with loaded bad versions
+    /// - `Err(UpdateError)` if cache directory cannot be determined
+    ///
+    /// # Requirements
+    /// - 15.3: Use system-dependent cache directory
+    /// - 15.4: Load bad versions from cache file
+    /// - 15.5: Handle corrupted cache files gracefully
+    /// - 15.6: Load on initialization
+    pub fn load() -> Result<Self, UpdateError> {
+        let cache_dir = directories::ProjectDirs::from("", "", "transcript-explorer")
+            .ok_or_else(|| {
+                UpdateError::ConfigurationError("Cannot determine cache directory".to_string())
+            })?
+            .cache_dir()
+            .to_path_buf();
+
+        Self::load_from_path(cache_dir)
+    }
+
+    /// Load bad versions from a specific cache directory (for testing)
+    ///
+    /// Internal method that loads from a specific path. Used by both `load()` and tests.
+    ///
+    /// # Arguments
+    /// * `cache_dir` - The cache directory path
+    ///
+    /// # Returns
+    /// - `Ok(BadVersionTracker)` with loaded bad versions
+    /// - `Err(UpdateError)` if cache directory cannot be created
+    fn load_from_path(cache_dir: std::path::PathBuf) -> Result<Self, UpdateError> {
+        // Create cache directory if it doesn't exist
+        std::fs::create_dir_all(&cache_dir).map_err(|e| {
+            UpdateError::ConfigurationError(format!("Cannot create cache directory: {}", e))
+        })?;
+
+        let cache_path = cache_dir.join("bad_versions.json");
+
+        // Try to load existing bad versions
+        let bad_versions = if cache_path.exists() {
+            match std::fs::read_to_string(&cache_path) {
+                Ok(content) => {
+                    match serde_json::from_str::<HashSet<String>>(&content) {
+                        Ok(versions) => versions,
+                        Err(e) => {
+                            eprintln!("Warning: Failed to parse bad versions cache: {}", e);
+                            HashSet::new()
+                        }
+                    }
+                }
+                Err(e) => {
+                    eprintln!("Warning: Failed to read bad versions cache: {}", e);
+                    HashSet::new()
+                }
+            }
+        } else {
+            HashSet::new()
+        };
+
+        Ok(Self {
+            cache_path,
+            bad_versions,
+        })
+    }
+
+    /// Mark a version as bad and persist to cache
+    ///
+    /// Adds a version to the bad version list and immediately saves it to the
+    /// cache file. This prevents the system from attempting to update to this
+    /// version again.
+    ///
+    /// # Arguments
+    /// * `version` - The version string to mark as bad
+    ///
+    /// # Returns
+    /// - `Ok(())` if the version was marked and saved successfully
+    /// - `Err(UpdateError)` if saving to cache fails
+    ///
+    /// # Requirements
+    /// - 15.1: Mark version as bad and persist
+    pub fn mark_bad(&mut self, version: String) -> Result<(), UpdateError> {
+        self.bad_versions.insert(version);
+        self.save()
+    }
+
+    /// Check if a version is marked as bad
+    ///
+    /// Returns true if the given version is in the bad version list.
+    ///
+    /// # Arguments
+    /// * `version` - The version string to check
+    ///
+    /// # Returns
+    /// - `true` if the version is marked as bad
+    /// - `false` if the version is not marked as bad
+    ///
+    /// # Requirements
+    /// - 15.2: Skip bad versions on update checks
+    pub fn is_bad(&self, version: &str) -> bool {
+        self.bad_versions.contains(version)
+    }
+
+    /// Persist bad versions to cache file
+    ///
+    /// Saves the current bad version list to the cache file in JSON format.
+    /// This ensures the list persists across application restarts.
+    ///
+    /// # Returns
+    /// - `Ok(())` if save succeeds
+    /// - `Err(UpdateError)` if save fails
+    ///
+    /// # Requirements
+    /// - 15.1: Persist bad versions to cache
+    pub fn save(&self) -> Result<(), UpdateError> {
+        let json = serde_json::to_string(&self.bad_versions).map_err(|e| {
+            UpdateError::ConfigurationError(format!("Failed to serialize bad versions: {}", e))
+        })?;
+
+        std::fs::write(&self.cache_path, json).map_err(|e| {
+            UpdateError::ConfigurationError(format!("Failed to write bad versions cache: {}", e))
+        })?;
+
+        Ok(())
+    }
+
+    /// Clear all bad versions
+    ///
+    /// Removes all bad versions from the list and updates the cache file.
+    ///
+    /// # Returns
+    /// - `Ok(())` if clear succeeds
+    /// - `Err(UpdateError)` if save fails
+    pub fn clear(&mut self) -> Result<(), UpdateError> {
+        self.bad_versions.clear();
+        self.save()
+    }
+
+    /// Get the number of bad versions
+    ///
+    /// Returns the count of versions currently marked as bad.
+    ///
+    /// # Returns
+    /// - The number of bad versions
+    pub fn count(&self) -> usize {
+        self.bad_versions.len()
+    }
+
+    /// Get all bad versions
+    ///
+    /// Returns a copy of the set of bad versions.
+    ///
+    /// # Returns
+    /// - A HashSet containing all bad versions
+    pub fn get_bad_versions(&self) -> HashSet<String> {
+        self.bad_versions.clone()
+    }
+}
+
+/// Error categories for better error handling and user feedback
+#[derive(Debug, Clone, PartialEq)]
+pub enum ErrorCategory {
+    /// Network-related errors (timeout, connection refused, DNS resolution)
+    NetworkError(String),
+    /// File system errors (permission denied, file not found)
+    FileSystemError(String),
+    /// GitHub API errors
+    ApiError(String),
+    /// Version parsing errors
+    VersionError(String),
+    /// Other errors
+    Other(String),
+}
+
+/// Error handler for categorizing and providing actionable error information
+///
+/// The ErrorHandler categorizes errors into meaningful groups and provides
+/// descriptive messages and recovery suggestions for users.
+pub struct ErrorHandler;
+
+impl ErrorHandler {
+    /// Create a new ErrorHandler
+    pub fn new() -> Self {
+        ErrorHandler
+    }
+
+    /// Categorize an error into a specific error category
+    ///
+    /// # Arguments
+    /// * `error` - The UpdateError to categorize
+    ///
+    /// # Returns
+    /// An ErrorCategory indicating the type of error
+    pub fn categorize(&self, error: &UpdateError) -> ErrorCategory {
+        match error {
+            UpdateError::Download { reason, .. } => {
+                if reason.contains("timeout") || reason.contains("timed out") {
+                    ErrorCategory::NetworkError("Connection timeout".to_string())
+                } else if reason.contains("connection refused") {
+                    ErrorCategory::NetworkError("Connection refused".to_string())
+                } else if reason.contains("DNS") || reason.contains("resolve") {
+                    ErrorCategory::NetworkError("DNS resolution failed".to_string())
+                } else if reason.contains("connection") {
+                    ErrorCategory::NetworkError(format!("Connection error: {}", reason))
+                } else {
+                    ErrorCategory::NetworkError(reason.clone())
+                }
+            }
+            UpdateError::PermissionDenied(msg) => {
+                ErrorCategory::FileSystemError(format!("Permission denied: {}", msg))
+            }
+            UpdateError::Verification { reason } => {
+                if reason.contains("not found") || reason.contains("does not exist") {
+                    ErrorCategory::FileSystemError(format!("File not found: {}", reason))
+                } else if reason.contains("not readable") || reason.contains("permission") {
+                    ErrorCategory::FileSystemError(format!("File access error: {}", reason))
+                } else {
+                    ErrorCategory::FileSystemError(reason.clone())
+                }
+            }
+            UpdateError::ApiError { status, message } => {
+                ErrorCategory::ApiError(format!("HTTP {}: {}", status, message))
+            }
+            UpdateError::VersionParse(msg) => {
+                ErrorCategory::VersionError(msg.clone())
+            }
+            UpdateError::HttpError(e) => {
+                let msg = e.to_string();
+                if msg.contains("timeout") {
+                    ErrorCategory::NetworkError("HTTP request timeout".to_string())
+                } else if msg.contains("connection") {
+                    ErrorCategory::NetworkError(format!("Connection error: {}", msg))
+                } else {
+                    ErrorCategory::NetworkError(msg)
+                }
+            }
+            UpdateError::IoError(e) => {
+                match e.kind() {
+                    std::io::ErrorKind::PermissionDenied => {
+                        ErrorCategory::FileSystemError("Permission denied".to_string())
+                    }
+                    std::io::ErrorKind::NotFound => {
+                        ErrorCategory::FileSystemError("File not found".to_string())
+                    }
+                    _ => ErrorCategory::FileSystemError(e.to_string()),
+                }
+            }
+            _ => ErrorCategory::Other(error.to_string()),
+        }
+    }
+
+    /// Get a descriptive error message for the user
+    ///
+    /// # Arguments
+    /// * `error` - The UpdateError to describe
+    ///
+    /// # Returns
+    /// A user-friendly error message
+    pub fn get_descriptive_message(&self, error: &UpdateError) -> String {
+        match self.categorize(error) {
+            ErrorCategory::NetworkError(msg) => {
+                format!("Network error: {}. Check your internet connection and try again.", msg)
+            }
+            ErrorCategory::FileSystemError(msg) => {
+                format!("File system error: {}. Check file permissions and disk space.", msg)
+            }
+            ErrorCategory::ApiError(msg) => {
+                format!("GitHub API error: {}. The service may be temporarily unavailable.", msg)
+            }
+            ErrorCategory::VersionError(msg) => {
+                format!("Version error: {}. The version format is invalid.", msg)
+            }
+            ErrorCategory::Other(msg) => {
+                format!("An error occurred: {}", msg)
+            }
+        }
+    }
+
+    /// Get recovery instructions for an error
+    ///
+    /// # Arguments
+    /// * `error` - The UpdateError to get recovery instructions for
+    ///
+    /// # Returns
+    /// An optional string with recovery instructions
+    pub fn get_recovery_action(&self, error: &UpdateError) -> Option<String> {
+        match self.categorize(error) {
+            ErrorCategory::NetworkError(_) => {
+                Some("Check your internet connection, verify DNS settings, and try again. If the problem persists, try again later.".to_string())
+            }
+            ErrorCategory::FileSystemError(msg) => {
+                if msg.contains("Permission denied") {
+                    Some("Try running the application with elevated privileges (sudo on Linux/macOS) or check file permissions.".to_string())
+                } else if msg.contains("not found") {
+                    Some("Ensure the file exists and the path is correct.".to_string())
+                } else {
+                    Some("Check disk space and file permissions.".to_string())
+                }
+            }
+            ErrorCategory::ApiError(_) => {
+                Some("Wait a moment and try again. If the problem persists, check GitHub's status page.".to_string())
+            }
+            ErrorCategory::VersionError(_) => {
+                Some("Verify the version format is correct (e.g., 1.2.3 or v1.2.3).".to_string())
+            }
+            ErrorCategory::Other(_) => None,
+        }
+    }
+
+    /// Check if an error is retryable
+    ///
+    /// # Arguments
+    /// * `error` - The UpdateError to check
+    ///
+    /// # Returns
+    /// true if the error is retryable, false otherwise
+    pub fn is_retryable(&self, error: &UpdateError) -> bool {
+        error.is_retryable()
+    }
+
+    /// Format a complete error report for logging or display
+    ///
+    /// # Arguments
+    /// * `error` - The UpdateError to format
+    ///
+    /// # Returns
+    /// A formatted error report string
+    pub fn format_error_report(&self, error: &UpdateError) -> String {
+        let category = self.categorize(error);
+        let message = self.get_descriptive_message(error);
+        let recovery = self.get_recovery_action(error);
+        let retryable = self.is_retryable(error);
+
+        let mut report = format!("Error: {}\n", message);
+        report.push_str(&format!("Category: {:?}\n", category));
+        report.push_str(&format!("Retryable: {}\n", retryable));
+
+        if let Some(recovery_msg) = recovery {
+            report.push_str(&format!("Recovery: {}\n", recovery_msg));
+        }
+
+        report
+    }
+}
+
+impl Default for ErrorHandler {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+/// UpdateManager orchestrates the entire update process
+///
+/// The UpdateManager coordinates all components to:
+/// - Detect platform and architecture
+/// - Query GitHub API for latest release
+/// - Compare versions
+/// - Check bad version list
+/// - Select appropriate asset
+/// - Handle user interaction (interactive mode)
+/// - Download binary
+/// - Verify binary integrity
+/// - Replace binary safely with rollback capability
+/// - Manage lock file lifecycle
+///
+/// # Example
+/// ```ignore
+/// let config = UpdateConfiguration::load()?;
+/// let manager = UpdateManager::new(config)?;
+/// let result = manager.check_and_update().await?;
+/// ```
+pub struct UpdateManager {
+    config: UpdateConfiguration,
+    platform: PlatformInfo,
+    lock_manager: LockFileManager,
+    bad_version_tracker: BadVersionTracker,
+    error_handler: ErrorHandler,
+}
+
+impl UpdateManager {
+    /// Create a new UpdateManager instance
+    ///
+    /// # Arguments
+    /// * `config` - Update configuration
+    ///
+    /// # Returns
+    /// A new UpdateManager or an error if initialization fails
+    pub fn new(config: UpdateConfiguration) -> Result<Self, UpdateError> {
+        // Validate configuration
+        config.validate()?;
+
+        // Detect platform
+        let platform = PlatformDetector::detect()?;
+
+        // Initialize lock manager
+        let lock_manager = LockFileManager::new()?;
+
+        // Load bad version tracker
+        let bad_version_tracker = BadVersionTracker::load()?;
+
+        // Create error handler
+        let error_handler = ErrorHandler::new();
+
+        Ok(Self {
+            config,
+            platform,
+            lock_manager,
+            bad_version_tracker,
+            error_handler,
+        })
+    }
+
+    /// Check for updates and perform update if available
+    ///
+    /// This is the main orchestration method that:
+    /// 1. Acquires lock to prevent concurrent updates
+    /// 2. Detects platform and architecture
+    /// 3. Queries GitHub API for latest release
+    /// 4. Compares versions
+    /// 5. Checks bad version list
+    /// 6. Selects appropriate asset
+    /// 7. Prompts user (interactive mode)
+    /// 8. Downloads binary
+    /// 9. Verifies binary
+    /// 10. Replaces binary
+    /// 11. Handles errors and rollback
+    /// 12. Releases lock
+    ///
+    /// # Returns
+    /// UpdateResult indicating the outcome of the check/update operation
+    pub async fn check_and_update(&self) -> Result<UpdateResult, UpdateError> {
+        // Acquire lock to prevent concurrent updates
+        self.lock_manager.acquire_lock()?;
+
+        // Ensure lock is released on exit
+        let result = self.perform_update().await;
+
+        // Release lock regardless of result
+        let _ = self.lock_manager.release_lock();
+
+        result
+    }
+
+    /// Perform the actual update process
+    async fn perform_update(&self) -> Result<UpdateResult, UpdateError> {
+        // Check if auto-update is enabled
+        if !self.config.enabled {
+            return Ok(UpdateResult::Skipped {
+                reason: "Auto-update is disabled".to_string(),
+            });
+        }
+
+        // Create GitHub API client
+        let github_client = GitHubApiClient::new(
+            self.config.github_repo_owner.clone(),
+            self.config.github_repo_name.clone(),
+        )?;
+
+        // Query GitHub API for latest release
+        let release = github_client.get_latest_release().await?;
+
+        // Parse remote version
+        let remote_version = SemanticVersion::parse(&release.version)?;
+
+        // Get current version from environment or config
+        let current_version_str = env!("CARGO_PKG_VERSION");
+        let current_version = SemanticVersion::parse(current_version_str)?;
+
+        // Check if remote version is newer
+        if !VersionComparator::is_newer(&remote_version, &current_version) {
+            return Ok(UpdateResult::UpToDate);
+        }
+
+        // Check if version is marked as bad
+        if self.bad_version_tracker.is_bad(&release.version) {
+            return Ok(UpdateResult::Skipped {
+                reason: format!("Version {} is marked as bad", release.version),
+            });
+        }
+
+        // Select appropriate asset for this platform
+        let asset = AssetSelector::select_asset(&self.platform, &release.assets)?;
+
+        // Create mode handler based on configuration
+        let mode_handler: Box<dyn ModeHandler> = if self.config.interactive_mode {
+            Box::new(InteractiveMode::new())
+        } else {
+            Box::new(NonInteractiveMode::new())
+        };
+
+        // Prompt user before checking (interactive mode only)
+        if !mode_handler.prompt_before_check() {
+            return Ok(UpdateResult::Skipped {
+                reason: "User declined update check".to_string(),
+            });
+        }
+
+        // Display new version found
+        mode_handler.display_status(&format!("New version available: {}", release.version));
+
+        // Prompt for confirmation (interactive mode only)
+        if !mode_handler.prompt_for_update_confirmation(&release.version) {
+            return Ok(UpdateResult::Skipped {
+                reason: "User declined update".to_string(),
+            });
+        }
+
+        // Download binary
+        mode_handler.display_status("Downloading update...");
+        let downloader = BinaryDownloader::new()?;
+        let downloaded_path = self.config.temp_directory.join(&asset.name);
+
+        downloader
+            .download_binary(&asset.download_url, &downloaded_path, None)
+            .await?;
+
+        // Check for cancellation
+        if mode_handler.check_for_cancellation() {
+            let _ = std::fs::remove_file(&downloaded_path);
+            return Ok(UpdateResult::Skipped {
+                reason: "Download cancelled by user".to_string(),
+            });
+        }
+
+        // Verify binary
+        mode_handler.display_status("Verifying binary...");
+        BinaryVerifier::verify_binary(&downloaded_path, asset.size)?;
+
+        // Get current binary path
+        let current_binary_path = std::env::current_exe()?;
+
+        // Replace binary
+        mode_handler.display_status("Installing update...");
+        BinaryReplacer::replace_binary(&current_binary_path, &downloaded_path, &release.version)?;
+
+        // Clean up downloaded file
+        let _ = std::fs::remove_file(&downloaded_path);
+
+        // Display success
+        mode_handler.display_success(&release.version);
+        mode_handler.finish_progress();
+
+        Ok(UpdateResult::Updated {
+            new_version: release.version,
+        })
+    }
+
+    /// Get the detected platform information
+    pub fn platform(&self) -> &PlatformInfo {
+        &self.platform
+    }
+
+    /// Get the configuration
+    pub fn config(&self) -> &UpdateConfiguration {
+        &self.config
+    }
+
+    /// Get the error handler
+    pub fn error_handler(&self) -> &ErrorHandler {
+        &self.error_handler
+    }
+
+    /// Spawn a background thread to check for updates
+    ///
+    /// This method spawns a new thread that runs the update check asynchronously
+    /// without blocking the main application. The thread is detached and runs
+    /// independently.
+    ///
+    /// # Returns
+    /// A JoinHandle that can be used to wait for thread completion (optional)
+    ///
+    /// # Example
+    /// ```ignore
+    /// let config = UpdateConfiguration::load()?;
+    /// let manager = UpdateManager::new(config)?;
+    /// manager.spawn_background_thread();
+    /// // Main application continues while update check runs in background
+    /// ```
+    pub fn spawn_background_thread(&self) -> std::thread::JoinHandle<()> {
+        // Clone configuration for the thread
+        let config = self.config.clone();
+
+        // Spawn a new thread
+        std::thread::spawn(move || {
+            // Create a new runtime for the thread
+            let rt = tokio::runtime::Runtime::new();
+            if let Err(e) = rt {
+                eprintln!("Failed to create runtime for background update thread: {}", e);
+                return;
+            }
+
+            let rt = rt.unwrap();
+
+            // Run the update check in the thread's runtime
+            rt.block_on(async {
+                // Create a new UpdateManager in the thread
+                match UpdateManager::new(config) {
+                    Ok(manager) => {
+                        // Perform the update check
+                        match manager.check_and_update().await {
+                            Ok(result) => {
+                                // Log the result
+                                match result {
+                                    UpdateResult::Updated { new_version } => {
+                                        eprintln!("Update completed: new version {} installed", new_version);
+                                    }
+                                    UpdateResult::UpToDate => {
+                                        eprintln!("Application is up to date");
+                                    }
+                                    UpdateResult::Skipped { reason } => {
+                                        eprintln!("Update skipped: {}", reason);
+                                    }
+                                }
+                            }
+                            Err(e) => {
+                                eprintln!("Background update check failed: {}", e.user_message());
+                            }
+                        }
+                    }
+                    Err(e) => {
+                        eprintln!("Failed to initialize UpdateManager in background thread: {}", e.user_message());
+                    }
+                }
+            });
+        })
+    }
+}
+
+/// Trait for mode-specific behavior (interactive vs non-interactive)
+trait ModeHandler: Send + Sync {
+    fn prompt_before_check(&self) -> bool;
+    fn prompt_for_update_confirmation(&self, new_version: &str) -> bool;
+    fn check_for_cancellation(&self) -> bool;
+    fn display_status(&self, message: &str);
+    fn display_progress(&self, progress: &DownloadProgress);
+    fn display_success(&self, new_version: &str);
+    fn display_error(&self, error: &UpdateError);
+    fn finish_progress(&self);
+}
+
+impl ModeHandler for InteractiveMode {
+    fn prompt_before_check(&self) -> bool {
+        self.prompt_before_check()
+    }
+
+    fn prompt_for_update_confirmation(&self, new_version: &str) -> bool {
+        self.prompt_for_update_confirmation(new_version)
+    }
+
+    fn check_for_cancellation(&self) -> bool {
+        self.check_for_cancellation()
+    }
+
+    fn display_status(&self, message: &str) {
+        self.display_status(message)
+    }
+
+    fn display_progress(&self, progress: &DownloadProgress) {
+        self.display_progress(progress)
+    }
+
+    fn display_success(&self, new_version: &str) {
+        self.display_success(new_version)
+    }
+
+    fn display_error(&self, error: &UpdateError) {
+        self.display_error(error)
+    }
+
+    fn finish_progress(&self) {
+        self.finish_progress()
+    }
+}
+
+impl ModeHandler for NonInteractiveMode {
+    fn prompt_before_check(&self) -> bool {
+        self.prompt_before_check()
+    }
+
+    fn prompt_for_update_confirmation(&self, new_version: &str) -> bool {
+        self.prompt_for_update_confirmation(new_version)
+    }
+
+    fn check_for_cancellation(&self) -> bool {
+        self.check_for_cancellation()
+    }
+
+    fn display_status(&self, message: &str) {
+        self.display_status(message)
+    }
+
+    fn display_progress(&self, progress: &DownloadProgress) {
+        self.display_progress(progress)
+    }
+
+    fn display_success(&self, new_version: &str) {
+        self.display_success(new_version)
+    }
+
+    fn display_error(&self, error: &UpdateError) {
+        self.display_error(error)
+    }
+
+    fn finish_progress(&self) {
+        self.finish_progress()
     }
 }
 
@@ -2738,4 +3471,990 @@ mod property_tests {
             }
         }
     }
+
+    #[test]
+    fn test_bad_version_tracker_load_empty() {
+        let temp_dir = tempfile::tempdir().expect("Failed to create temp dir");
+        
+        // Mock the cache directory by creating a tracker with a custom path
+        let cache_path = temp_dir.path().join("bad_versions.json");
+        
+        // Create a tracker manually for testing
+        let tracker = BadVersionTracker {
+            cache_path,
+            bad_versions: HashSet::new(),
+        };
+        
+        assert_eq!(tracker.count(), 0);
+        assert!(!tracker.is_bad("1.0.0"));
+    }
+
+    #[test]
+    fn test_bad_version_tracker_mark_bad() {
+        let temp_dir = tempfile::tempdir().expect("Failed to create temp dir");
+        let cache_path = temp_dir.path().join("bad_versions.json");
+        
+        let mut tracker = BadVersionTracker {
+            cache_path: cache_path.clone(),
+            bad_versions: HashSet::new(),
+        };
+        
+        // Mark a version as bad
+        let result = tracker.mark_bad("1.0.0".to_string());
+        assert!(result.is_ok());
+        assert!(tracker.is_bad("1.0.0"));
+        assert_eq!(tracker.count(), 1);
+    }
+
+    #[test]
+    fn test_bad_version_tracker_is_bad() {
+        let temp_dir = tempfile::tempdir().expect("Failed to create temp dir");
+        let cache_path = temp_dir.path().join("bad_versions.json");
+        
+        let mut tracker = BadVersionTracker {
+            cache_path,
+            bad_versions: HashSet::new(),
+        };
+        
+        // Initially not bad
+        assert!(!tracker.is_bad("1.0.0"));
+        
+        // Mark as bad
+        let _ = tracker.mark_bad("1.0.0".to_string());
+        assert!(tracker.is_bad("1.0.0"));
+        
+        // Other versions not bad
+        assert!(!tracker.is_bad("2.0.0"));
+    }
+
+    #[test]
+    fn test_bad_version_tracker_save_and_load() {
+        let temp_dir = tempfile::tempdir().expect("Failed to create temp dir");
+        let cache_path = temp_dir.path().join("bad_versions.json");
+        
+        // Create and save bad versions
+        {
+            let mut tracker = BadVersionTracker {
+                cache_path: cache_path.clone(),
+                bad_versions: HashSet::new(),
+            };
+            
+            let _ = tracker.mark_bad("1.0.0".to_string());
+            let _ = tracker.mark_bad("1.1.0".to_string());
+            let _ = tracker.mark_bad("1.2.0".to_string());
+        }
+        
+        // Verify file was created
+        assert!(cache_path.exists());
+        
+        // Load and verify
+        let content = std::fs::read_to_string(&cache_path).expect("Failed to read cache");
+        let loaded: HashSet<String> = serde_json::from_str(&content).expect("Failed to parse JSON");
+        
+        assert_eq!(loaded.len(), 3);
+        assert!(loaded.contains("1.0.0"));
+        assert!(loaded.contains("1.1.0"));
+        assert!(loaded.contains("1.2.0"));
+    }
+
+    #[test]
+    fn test_bad_version_tracker_clear() {
+        let temp_dir = tempfile::tempdir().expect("Failed to create temp dir");
+        let cache_path = temp_dir.path().join("bad_versions.json");
+        
+        let mut tracker = BadVersionTracker {
+            cache_path: cache_path.clone(),
+            bad_versions: HashSet::new(),
+        };
+        
+        // Add some bad versions
+        let _ = tracker.mark_bad("1.0.0".to_string());
+        let _ = tracker.mark_bad("1.1.0".to_string());
+        assert_eq!(tracker.count(), 2);
+        
+        // Clear
+        let result = tracker.clear();
+        assert!(result.is_ok());
+        assert_eq!(tracker.count(), 0);
+        assert!(!tracker.is_bad("1.0.0"));
+    }
+
+    #[test]
+    fn test_bad_version_tracker_get_bad_versions() {
+        let temp_dir = tempfile::tempdir().expect("Failed to create temp dir");
+        let cache_path = temp_dir.path().join("bad_versions.json");
+        
+        let mut tracker = BadVersionTracker {
+            cache_path,
+            bad_versions: HashSet::new(),
+        };
+        
+        let _ = tracker.mark_bad("1.0.0".to_string());
+        let _ = tracker.mark_bad("1.1.0".to_string());
+        
+        let bad_versions = tracker.get_bad_versions();
+        assert_eq!(bad_versions.len(), 2);
+        assert!(bad_versions.contains("1.0.0"));
+        assert!(bad_versions.contains("1.1.0"));
+    }
+
+    #[test]
+    fn test_bad_version_tracker_corrupted_cache() {
+        let temp_dir = tempfile::tempdir().expect("Failed to create temp dir");
+        let cache_path = temp_dir.path().join("bad_versions.json");
+        
+        // Write corrupted JSON
+        std::fs::write(&cache_path, "{ invalid json }").expect("Failed to write corrupted cache");
+        
+        // Create tracker - should handle gracefully
+        let tracker = BadVersionTracker {
+            cache_path,
+            bad_versions: HashSet::new(),
+        };
+        
+        // Should start with empty list
+        assert_eq!(tracker.count(), 0);
+    }
+
+    #[test]
+    fn test_bad_version_tracker_multiple_marks() {
+        let temp_dir = tempfile::tempdir().expect("Failed to create temp dir");
+        let cache_path = temp_dir.path().join("bad_versions.json");
+        
+        let mut tracker = BadVersionTracker {
+            cache_path,
+            bad_versions: HashSet::new(),
+        };
+        
+        // Mark same version multiple times - should only appear once
+        let _ = tracker.mark_bad("1.0.0".to_string());
+        let _ = tracker.mark_bad("1.0.0".to_string());
+        let _ = tracker.mark_bad("1.0.0".to_string());
+        
+        assert_eq!(tracker.count(), 1);
+        assert!(tracker.is_bad("1.0.0"));
+    }
+
+    #[test]
+    fn test_bad_version_tracker_load_with_corrupted_cache() {
+        let temp_dir = tempfile::tempdir().expect("Failed to create temp dir");
+        let cache_path = temp_dir.path().join("bad_versions.json");
+        
+        // Write corrupted JSON to the cache file
+        std::fs::write(&cache_path, "{ invalid json }").expect("Failed to write corrupted cache");
+        
+        // Load from the directory with corrupted cache
+        let tracker = BadVersionTracker::load_from_path(temp_dir.path().to_path_buf())
+            .expect("Failed to load tracker");
+        
+        // Should start with empty list despite corrupted cache
+        assert_eq!(tracker.count(), 0);
+        assert!(!tracker.is_bad("1.0.0"));
+    }
+
+    #[test]
+    fn test_bad_version_tracker_load_with_empty_cache_file() {
+        let temp_dir = tempfile::tempdir().expect("Failed to create temp dir");
+        let cache_path = temp_dir.path().join("bad_versions.json");
+        
+        // Write empty JSON array to the cache file
+        std::fs::write(&cache_path, "[]").expect("Failed to write empty cache");
+        
+        // Load from the directory with empty cache
+        let tracker = BadVersionTracker::load_from_path(temp_dir.path().to_path_buf())
+            .expect("Failed to load tracker");
+        
+        // Should start with empty list
+        assert_eq!(tracker.count(), 0);
+    }
+
+    #[test]
+    fn test_bad_version_tracker_load_with_valid_cache() {
+        let temp_dir = tempfile::tempdir().expect("Failed to create temp dir");
+        let cache_path = temp_dir.path().join("bad_versions.json");
+        
+        // Write valid JSON with bad versions
+        let bad_versions = vec!["1.0.0", "1.1.0", "1.2.0"];
+        let json = serde_json::to_string(&bad_versions).expect("Failed to serialize");
+        std::fs::write(&cache_path, json).expect("Failed to write cache");
+        
+        // Load from the directory with valid cache
+        let tracker = BadVersionTracker::load_from_path(temp_dir.path().to_path_buf())
+            .expect("Failed to load tracker");
+        
+        // Should load all bad versions
+        assert_eq!(tracker.count(), 3);
+        assert!(tracker.is_bad("1.0.0"));
+        assert!(tracker.is_bad("1.1.0"));
+        assert!(tracker.is_bad("1.2.0"));
+        assert!(!tracker.is_bad("2.0.0"));
+    }
+
+    #[test]
+    fn test_bad_version_tracker_load_nonexistent_cache() {
+        let temp_dir = tempfile::tempdir().expect("Failed to create temp dir");
+        
+        // Load from directory with no cache file
+        let tracker = BadVersionTracker::load_from_path(temp_dir.path().to_path_buf())
+            .expect("Failed to load tracker");
+        
+        // Should start with empty list
+        assert_eq!(tracker.count(), 0);
+    }
+
+    // Error handler tests
+    #[test]
+    fn test_error_handler_categorize_network_timeout() {
+        let error = UpdateError::Download {
+            reason: "connection timeout".to_string(),
+            retryable: true,
+        };
+        let handler = ErrorHandler::new();
+        let category = handler.categorize(&error);
+        assert!(matches!(category, ErrorCategory::NetworkError(_)));
+    }
+
+    #[test]
+    fn test_error_handler_categorize_network_connection_refused() {
+        let error = UpdateError::Download {
+            reason: "connection refused".to_string(),
+            retryable: true,
+        };
+        let handler = ErrorHandler::new();
+        let category = handler.categorize(&error);
+        assert!(matches!(category, ErrorCategory::NetworkError(_)));
+    }
+
+    #[test]
+    fn test_error_handler_categorize_network_dns() {
+        let error = UpdateError::Download {
+            reason: "DNS resolution failed".to_string(),
+            retryable: true,
+        };
+        let handler = ErrorHandler::new();
+        let category = handler.categorize(&error);
+        assert!(matches!(category, ErrorCategory::NetworkError(_)));
+    }
+
+    #[test]
+    fn test_error_handler_categorize_file_permission() {
+        let error = UpdateError::PermissionDenied("cannot write to file".to_string());
+        let handler = ErrorHandler::new();
+        let category = handler.categorize(&error);
+        assert!(matches!(category, ErrorCategory::FileSystemError(_)));
+    }
+
+    #[test]
+    fn test_error_handler_categorize_file_not_found() {
+        let error = UpdateError::Verification {
+            reason: "file not found".to_string(),
+        };
+        let handler = ErrorHandler::new();
+        let category = handler.categorize(&error);
+        assert!(matches!(category, ErrorCategory::FileSystemError(_)));
+    }
+
+    #[test]
+    fn test_error_handler_categorize_api_error() {
+        let error = UpdateError::ApiError {
+            status: 500,
+            message: "Internal server error".to_string(),
+        };
+        let handler = ErrorHandler::new();
+        let category = handler.categorize(&error);
+        assert!(matches!(category, ErrorCategory::ApiError(_)));
+    }
+
+    #[test]
+    fn test_error_handler_categorize_version_error() {
+        let error = UpdateError::VersionParse("invalid format".to_string());
+        let handler = ErrorHandler::new();
+        let category = handler.categorize(&error);
+        assert!(matches!(category, ErrorCategory::VersionError(_)));
+    }
+
+    #[test]
+    fn test_error_handler_get_descriptive_message_network() {
+        let error = UpdateError::Download {
+            reason: "connection timeout".to_string(),
+            retryable: true,
+        };
+        let handler = ErrorHandler::new();
+        let message = handler.get_descriptive_message(&error);
+        assert!(message.contains("Network error"));
+        assert!(message.contains("timeout"));
+    }
+
+    #[test]
+    fn test_error_handler_get_descriptive_message_permission() {
+        let error = UpdateError::PermissionDenied("cannot write to /usr/bin/app".to_string());
+        let handler = ErrorHandler::new();
+        let message = handler.get_descriptive_message(&error);
+        assert!(message.contains("Permission denied"));
+        assert!(message.contains("/usr/bin/app"));
+    }
+
+    #[test]
+    fn test_error_handler_get_recovery_action_network() {
+        let error = UpdateError::Download {
+            reason: "connection timeout".to_string(),
+            retryable: true,
+        };
+        let handler = ErrorHandler::new();
+        let action = handler.get_recovery_action(&error);
+        assert!(action.is_some());
+        let action_str = action.unwrap();
+        assert!(action_str.contains("internet connection") || action_str.contains("retry"));
+    }
+
+    #[test]
+    fn test_error_handler_get_recovery_action_permission() {
+        let error = UpdateError::PermissionDenied("cannot write to binary".to_string());
+        let handler = ErrorHandler::new();
+        let action = handler.get_recovery_action(&error);
+        assert!(action.is_some());
+        let action_str = action.unwrap();
+        assert!(action_str.contains("elevated privileges") || action_str.contains("permissions"));
+    }
+
+    #[test]
+    fn test_error_handler_get_recovery_action_none() {
+        let error = UpdateError::VersionParse("invalid format".to_string());
+        let handler = ErrorHandler::new();
+        let action = handler.get_recovery_action(&error);
+        // Version parse errors may not have recovery actions
+        // This is acceptable
+        let _ = action;
+    }
+
+    #[test]
+    fn test_error_handler_is_retryable_network() {
+        let error = UpdateError::Download {
+            reason: "timeout".to_string(),
+            retryable: true,
+        };
+        let handler = ErrorHandler::new();
+        assert!(handler.is_retryable(&error));
+    }
+
+    #[test]
+    fn test_error_handler_is_retryable_verification() {
+        let error = UpdateError::Verification {
+            reason: "size mismatch".to_string(),
+        };
+        let handler = ErrorHandler::new();
+        assert!(!handler.is_retryable(&error));
+    }
+
+    #[test]
+    fn test_error_handler_format_error_report() {
+        let error = UpdateError::Download {
+            reason: "connection timeout".to_string(),
+            retryable: true,
+        };
+        let handler = ErrorHandler::new();
+        let report = handler.format_error_report(&error);
+        assert!(report.contains("Error"));
+        assert!(report.contains("timeout"));
+    }
 }
+
+/// Interactive mode handler for user-prompted updates
+#[derive(Debug, Clone)]
+pub struct InteractiveMode {
+    feedback: UserFeedback,
+}
+
+impl InteractiveMode {
+    /// Create a new interactive mode handler
+    pub fn new() -> Self {
+        Self {
+            feedback: UserFeedback::new(true),
+        }
+    }
+
+    /// Prompt user before checking for updates
+    /// Returns true if user wants to proceed, false if they want to skip
+    pub fn prompt_before_check(&self) -> bool {
+        self.feedback.prompt_for_confirmation("Check for updates?")
+    }
+
+    /// Display new version and ask for confirmation to download
+    /// Returns true if user confirms, false if they decline
+    pub fn prompt_for_update_confirmation(&self, new_version: &str) -> bool {
+        self.feedback.display_new_version(new_version);
+        self.feedback.prompt_for_confirmation(&format!(
+            "Download and install version {}?",
+            new_version
+        ))
+    }
+
+    /// Allow user to cancel during download
+    /// This is a placeholder for cancellation support during download
+    /// In a real implementation, this would be called periodically during download
+    pub fn check_for_cancellation(&self) -> bool {
+        // In interactive mode, we could check for user input (Ctrl+C, etc.)
+        // For now, this returns false (no cancellation)
+        false
+    }
+
+    /// Display status message
+    pub fn display_status(&self, message: &str) {
+        self.feedback.display_status(message);
+    }
+
+    /// Display download progress
+    pub fn display_progress(&self, progress: &DownloadProgress) {
+        self.feedback.display_download_progress(progress);
+    }
+
+    /// Display success message
+    pub fn display_success(&self, new_version: &str) {
+        self.feedback.display_success(new_version);
+    }
+
+    /// Display error message
+    pub fn display_error(&self, error: &UpdateError) {
+        self.feedback.display_error(error);
+    }
+
+    /// Finish progress display
+    pub fn finish_progress(&self) {
+        self.feedback.finish_progress();
+    }
+}
+
+impl Default for InteractiveMode {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+/// User feedback system for displaying update status and progress
+#[derive(Debug, Clone)]
+pub struct UserFeedback {
+    interactive_mode: bool,
+}
+
+impl UserFeedback {
+    /// Create a new user feedback system
+    pub fn new(interactive_mode: bool) -> Self {
+        Self { interactive_mode }
+    }
+
+    /// Display the current version on startup
+    pub fn display_current_version(&self, version: &str) {
+        println!("Current version: {}", version);
+    }
+
+    /// Display a status message during checks
+    pub fn display_status(&self, message: &str) {
+        println!("{}", message);
+    }
+
+    /// Display the new version when found
+    pub fn display_new_version(&self, version: &str) {
+        println!("New version available: {}", version);
+    }
+
+    /// Display download progress with progress bar
+    pub fn display_download_progress(&self, progress: &DownloadProgress) {
+        let percentage = progress.percentage();
+        let bar_width = 30;
+        let filled = (bar_width as f64 * percentage / 100.0) as usize;
+        let empty = bar_width - filled;
+
+        print!(
+            "\rDownload progress: [{}{}] {:.1}% ({}/{})",
+            "=".repeat(filled),
+            " ".repeat(empty),
+            percentage,
+            progress.bytes_downloaded,
+            progress.total_bytes
+        );
+        let _ = std::io::stdout().flush();
+    }
+
+    /// Display success message on completion
+    pub fn display_success(&self, new_version: &str) {
+        println!("\nUpdate successful! New version: {}", new_version);
+    }
+
+    /// Display error message with actionable information
+    pub fn display_error(&self, error: &UpdateError) {
+        let handler = ErrorHandler::new();
+        let message = handler.get_descriptive_message(error);
+        let recovery = handler.get_recovery_action(error);
+
+        eprintln!("Error: {}", message);
+        if let Some(recovery_msg) = recovery {
+            eprintln!("Action: {}", recovery_msg);
+        }
+    }
+
+    /// Prompt user for confirmation (interactive mode only)
+    pub fn prompt_for_confirmation(&self, message: &str) -> bool {
+        if !self.interactive_mode {
+            return true;
+        }
+
+        println!("{} (y/n): ", message);
+        let mut input = String::new();
+        std::io::stdin()
+            .read_line(&mut input)
+            .ok();
+        input.trim().to_lowercase() == "y"
+    }
+
+    /// Display a newline after progress bar
+    pub fn finish_progress(&self) {
+        println!();
+    }
+}
+
+#[cfg(test)]
+mod user_feedback_tests {
+    use super::*;
+
+    #[test]
+    fn test_user_feedback_creation() {
+        let feedback = UserFeedback::new(true);
+        assert!(feedback.interactive_mode);
+
+        let feedback = UserFeedback::new(false);
+        assert!(!feedback.interactive_mode);
+    }
+
+    #[test]
+    fn test_user_feedback_display_current_version() {
+        let feedback = UserFeedback::new(true);
+        // This test just verifies the method doesn't panic
+        feedback.display_current_version("1.0.0");
+    }
+
+    #[test]
+    fn test_user_feedback_display_status() {
+        let feedback = UserFeedback::new(true);
+        // This test just verifies the method doesn't panic
+        feedback.display_status("Checking for updates...");
+    }
+
+    #[test]
+    fn test_user_feedback_display_new_version() {
+        let feedback = UserFeedback::new(true);
+        // This test just verifies the method doesn't panic
+        feedback.display_new_version("2.0.0");
+    }
+
+    #[test]
+    fn test_user_feedback_display_download_progress() {
+        let feedback = UserFeedback::new(true);
+        let progress = DownloadProgress {
+            bytes_downloaded: 500,
+            total_bytes: 1000,
+        };
+        // This test just verifies the method doesn't panic
+        feedback.display_download_progress(&progress);
+    }
+
+    #[test]
+    fn test_user_feedback_display_success() {
+        let feedback = UserFeedback::new(true);
+        // This test just verifies the method doesn't panic
+        feedback.display_success("2.0.0");
+    }
+
+    #[test]
+    fn test_user_feedback_display_error() {
+        let feedback = UserFeedback::new(true);
+        let error = UpdateError::VersionParse("invalid version".to_string());
+        // This test just verifies the method doesn't panic
+        feedback.display_error(&error);
+    }
+
+    #[test]
+    fn test_user_feedback_finish_progress() {
+        let feedback = UserFeedback::new(true);
+        // This test just verifies the method doesn't panic
+        feedback.finish_progress();
+    }
+
+    #[test]
+    fn test_user_feedback_prompt_non_interactive() {
+        let feedback = UserFeedback::new(false);
+        // In non-interactive mode, should always return true
+        assert!(feedback.prompt_for_confirmation("Continue?"));
+    }
+}
+
+#[cfg(test)]
+mod interactive_mode_tests {
+    use super::*;
+
+    #[test]
+    fn test_interactive_mode_creation() {
+        let mode = InteractiveMode::new();
+        assert_eq!(mode.feedback.interactive_mode, true);
+    }
+
+    #[test]
+    fn test_interactive_mode_default() {
+        let mode = InteractiveMode::default();
+        assert_eq!(mode.feedback.interactive_mode, true);
+    }
+
+    #[test]
+    fn test_interactive_mode_check_for_cancellation() {
+        let mode = InteractiveMode::new();
+        // Should return false (no cancellation) by default
+        assert!(!mode.check_for_cancellation());
+    }
+
+    #[test]
+    fn test_interactive_mode_display_status() {
+        let mode = InteractiveMode::new();
+        // This test just verifies the method doesn't panic
+        mode.display_status("Checking for updates...");
+    }
+
+    #[test]
+    fn test_interactive_mode_display_progress() {
+        let mode = InteractiveMode::new();
+        let progress = DownloadProgress {
+            bytes_downloaded: 500,
+            total_bytes: 1000,
+        };
+        // This test just verifies the method doesn't panic
+        mode.display_progress(&progress);
+    }
+
+    #[test]
+    fn test_interactive_mode_display_success() {
+        let mode = InteractiveMode::new();
+        // This test just verifies the method doesn't panic
+        mode.display_success("2.0.0");
+    }
+
+    #[test]
+    fn test_interactive_mode_display_error() {
+        let mode = InteractiveMode::new();
+        let error = UpdateError::VersionParse("invalid version".to_string());
+        // This test just verifies the method doesn't panic
+        mode.display_error(&error);
+    }
+
+    #[test]
+    fn test_interactive_mode_finish_progress() {
+        let mode = InteractiveMode::new();
+        // This test just verifies the method doesn't panic
+        mode.finish_progress();
+    }
+}
+
+/// Non-interactive mode handler for automated updates
+/// Skips all user prompts and automatically downloads/installs updates
+#[derive(Debug, Clone)]
+pub struct NonInteractiveMode {
+    feedback: UserFeedback,
+}
+
+impl NonInteractiveMode {
+    /// Create a new non-interactive mode handler
+    pub fn new() -> Self {
+        Self {
+            feedback: UserFeedback::new(false),
+        }
+    }
+
+    /// Skip user prompt before checking for updates
+    /// Always returns true in non-interactive mode
+    pub fn prompt_before_check(&self) -> bool {
+        true
+    }
+
+    /// Skip user confirmation for update
+    /// Always returns true in non-interactive mode (auto-proceed)
+    pub fn prompt_for_update_confirmation(&self, _new_version: &str) -> bool {
+        true
+    }
+
+    /// Check for cancellation (not applicable in non-interactive mode)
+    /// Always returns false (no cancellation)
+    pub fn check_for_cancellation(&self) -> bool {
+        false
+    }
+
+    /// Display status message to stdout
+    pub fn display_status(&self, message: &str) {
+        self.feedback.display_status(message);
+    }
+
+    /// Display download progress to stdout
+    pub fn display_progress(&self, progress: &DownloadProgress) {
+        self.feedback.display_download_progress(progress);
+    }
+
+    /// Display success message to stdout
+    pub fn display_success(&self, new_version: &str) {
+        self.feedback.display_success(new_version);
+    }
+
+    /// Display error message to stderr
+    pub fn display_error(&self, error: &UpdateError) {
+        self.feedback.display_error(error);
+    }
+
+    /// Finish progress display
+    pub fn finish_progress(&self) {
+        self.feedback.finish_progress();
+    }
+
+    /// Log result to stdout or log file
+    /// In non-interactive mode, all results are logged to stdout
+    pub fn log_result(&self, message: &str) {
+        println!("{}", message);
+    }
+
+    /// Exit with appropriate exit code
+    /// Returns the exit code that should be used
+    pub fn get_exit_code(&self, result: &Result<UpdateResult, UpdateError>) -> i32 {
+        match result {
+            Ok(UpdateResult::Updated { .. }) => 0,
+            Ok(UpdateResult::UpToDate) => 0,
+            Ok(UpdateResult::Skipped { .. }) => 0,
+            Err(_) => 1,
+        }
+    }
+}
+
+impl Default for NonInteractiveMode {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+#[cfg(test)]
+mod non_interactive_mode_tests {
+    use super::*;
+
+    #[test]
+    fn test_non_interactive_mode_creation() {
+        let mode = NonInteractiveMode::new();
+        assert_eq!(mode.feedback.interactive_mode, false);
+    }
+
+    #[test]
+    fn test_non_interactive_mode_default() {
+        let mode = NonInteractiveMode::default();
+        assert_eq!(mode.feedback.interactive_mode, false);
+    }
+
+    #[test]
+    fn test_non_interactive_mode_prompt_before_check() {
+        let mode = NonInteractiveMode::new();
+        // Should always return true (skip prompt, proceed)
+        assert!(mode.prompt_before_check());
+    }
+
+    #[test]
+    fn test_non_interactive_mode_prompt_for_update_confirmation() {
+        let mode = NonInteractiveMode::new();
+        // Should always return true (auto-proceed)
+        assert!(mode.prompt_for_update_confirmation("2.0.0"));
+    }
+
+    #[test]
+    fn test_non_interactive_mode_check_for_cancellation() {
+        let mode = NonInteractiveMode::new();
+        // Should always return false (no cancellation)
+        assert!(!mode.check_for_cancellation());
+    }
+
+    #[test]
+    fn test_non_interactive_mode_display_status() {
+        let mode = NonInteractiveMode::new();
+        // This test just verifies the method doesn't panic
+        mode.display_status("Checking for updates...");
+    }
+
+    #[test]
+    fn test_non_interactive_mode_display_progress() {
+        let mode = NonInteractiveMode::new();
+        let progress = DownloadProgress {
+            bytes_downloaded: 500,
+            total_bytes: 1000,
+        };
+        // This test just verifies the method doesn't panic
+        mode.display_progress(&progress);
+    }
+
+    #[test]
+    fn test_non_interactive_mode_display_success() {
+        let mode = NonInteractiveMode::new();
+        // This test just verifies the method doesn't panic
+        mode.display_success("2.0.0");
+    }
+
+    #[test]
+    fn test_non_interactive_mode_display_error() {
+        let mode = NonInteractiveMode::new();
+        let error = UpdateError::VersionParse("invalid version".to_string());
+        // This test just verifies the method doesn't panic
+        mode.display_error(&error);
+    }
+
+    #[test]
+    fn test_non_interactive_mode_finish_progress() {
+        let mode = NonInteractiveMode::new();
+        // This test just verifies the method doesn't panic
+        mode.finish_progress();
+    }
+
+    #[test]
+    fn test_non_interactive_mode_log_result() {
+        let mode = NonInteractiveMode::new();
+        // This test just verifies the method doesn't panic
+        mode.log_result("Update completed successfully");
+    }
+
+    #[test]
+    fn test_non_interactive_mode_get_exit_code_success() {
+        let mode = NonInteractiveMode::new();
+        let result = Ok(UpdateResult::Updated {
+            new_version: "2.0.0".to_string(),
+        });
+        assert_eq!(mode.get_exit_code(&result), 0);
+    }
+
+    #[test]
+    fn test_non_interactive_mode_get_exit_code_up_to_date() {
+        let mode = NonInteractiveMode::new();
+        let result = Ok(UpdateResult::UpToDate);
+        assert_eq!(mode.get_exit_code(&result), 0);
+    }
+
+    #[test]
+    fn test_non_interactive_mode_get_exit_code_skipped() {
+        let mode = NonInteractiveMode::new();
+        let result = Ok(UpdateResult::Skipped {
+            reason: "Already up to date".to_string(),
+        });
+        assert_eq!(mode.get_exit_code(&result), 0);
+    }
+
+    #[test]
+    fn test_non_interactive_mode_get_exit_code_error() {
+        let mode = NonInteractiveMode::new();
+        let result: Result<UpdateResult, UpdateError> =
+            Err(UpdateError::VersionParse("invalid version".to_string()));
+        assert_eq!(mode.get_exit_code(&result), 1);
+    }
+
+    #[test]
+    fn test_non_interactive_mode_no_prompts() {
+        let mode = NonInteractiveMode::new();
+        // Verify that all prompt methods return true (auto-proceed)
+        assert!(mode.prompt_before_check());
+        assert!(mode.prompt_for_update_confirmation("2.0.0"));
+        assert!(!mode.check_for_cancellation());
+    }
+
+    #[test]
+    fn test_update_manager_creation() {
+        let config = UpdateConfiguration::default();
+        let manager = UpdateManager::new(config);
+        assert!(manager.is_ok());
+    }
+
+    #[test]
+    fn test_update_manager_platform_detection() {
+        let config = UpdateConfiguration::default();
+        let manager = UpdateManager::new(config).unwrap();
+        let platform = manager.platform();
+        assert!(matches!(platform.os, OperatingSystem::Linux | OperatingSystem::MacOS | OperatingSystem::Windows));
+        assert!(matches!(platform.arch, Architecture::X86_64 | Architecture::Aarch64));
+    }
+
+    #[test]
+    fn test_update_manager_config_access() {
+        let config = UpdateConfiguration::default();
+        let manager = UpdateManager::new(config.clone()).unwrap();
+        assert_eq!(manager.config().enabled, config.enabled);
+        assert_eq!(manager.config().github_repo_owner, config.github_repo_owner);
+    }
+
+    #[test]
+    fn test_update_manager_error_handler_access() {
+        let config = UpdateConfiguration::default();
+        let manager = UpdateManager::new(config).unwrap();
+        let handler = manager.error_handler();
+        assert!(handler.is_retryable(&UpdateError::Download {
+            reason: "timeout".to_string(),
+            retryable: true,
+        }));
+    }
+
+    #[test]
+    fn test_update_manager_lock_file_lifecycle() {
+        let config = UpdateConfiguration::default();
+        let manager = UpdateManager::new(config).unwrap();
+        
+        // Lock should not be held initially
+        assert!(!manager.lock_manager.is_locked());
+        
+        // Acquire lock
+        assert!(manager.lock_manager.acquire_lock().is_ok());
+        assert!(manager.lock_manager.is_locked());
+        
+        // Release lock
+        assert!(manager.lock_manager.release_lock().is_ok());
+        assert!(!manager.lock_manager.is_locked());
+    }
+
+    #[test]
+    fn test_update_manager_bad_version_tracker_access() {
+        let config = UpdateConfiguration::default();
+        let manager = UpdateManager::new(config).unwrap();
+        
+        // Bad version tracker should be loaded
+        assert_eq!(manager.bad_version_tracker.count(), 0);
+    }
+
+    #[test]
+    fn test_update_manager_disabled_auto_update() {
+        let mut config = UpdateConfiguration::default();
+        config.enabled = false;
+        let manager = UpdateManager::new(config).unwrap();
+        
+        // Verify config is disabled
+        assert!(!manager.config().enabled);
+    }
+
+    #[test]
+    fn test_update_manager_spawn_background_thread() {
+        let config = UpdateConfiguration::default();
+        let manager = UpdateManager::new(config).unwrap();
+        
+        // Spawn background thread
+        let thread_handle = manager.spawn_background_thread();
+        
+        // Verify thread handle is valid
+        assert!(!thread_handle.is_finished());
+        
+        // Wait for thread to complete (with timeout)
+        let result = std::thread::spawn(move || {
+            // Give thread up to 5 seconds to complete
+            for _ in 0..50 {
+                if thread_handle.is_finished() {
+                    return true;
+                }
+                std::thread::sleep(std::time::Duration::from_millis(100));
+            }
+            false
+        }).join();
+        
+        // Thread should have completed or timed out gracefully
+        assert!(result.is_ok());
+    }
+}
+

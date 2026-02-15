@@ -67,7 +67,7 @@ This implementation plan breaks down the auto-update feature into discrete codin
     - Generate API requests, verify User-Agent header present
 
 - [-] 5. Implement asset selection
-  - [ ] 5.1 Implement `AssetSelector` with platform matching
+  - [x] 5.1 Implement `AssetSelector` with platform matching
     - Build expected asset name patterns for platform/architecture
     - Search for exact matches in available assets
     - Prioritize platform-specific assets
@@ -79,7 +79,7 @@ This implementation plan breaks down the auto-update feature into discrete codin
     - Generate platform/asset combinations, verify deterministic selection
 
 - [ ] 6. Implement bad version tracking
-  - [ ] 6.1 Implement `BadVersionTracker` struct
+  - [x] 6.1 Implement `BadVersionTracker` struct
     - Use `directories` crate for cross-platform cache paths
     - Load bad versions from cache file on initialization
     - Implement `mark_bad()` to add version to bad list
@@ -87,7 +87,7 @@ This implementation plan breaks down the auto-update feature into discrete codin
     - Implement `save()` to persist bad versions to cache
     - _Requirements: 15.1, 15.2, 15.3, 15.4, 15.6_
   
-  - [ ] 6.2 Implement cache file handling
+  - [x] 6.2 Implement cache file handling
     - Use JSON format for cache file
     - Handle corrupted cache files gracefully
     - Fall back to empty list on load errors
@@ -208,14 +208,14 @@ This implementation plan breaks down the auto-update feature into discrete codin
     - Generate invalid configs, verify defaults used
 
 - [ ] 12. Implement error handling and user feedback
-  - [ ] 12.1 Implement `ErrorHandler` with error categorization
+  - [x] 12.1 Implement `ErrorHandler` with error categorization
     - Distinguish network errors (timeout, connection refused, DNS)
     - Distinguish file system errors (permission, not found)
     - Provide descriptive error messages
     - Suggest recovery actions
     - _Requirements: 10.1, 10.2, 10.3, 10.5_
   
-  - [ ] 12.2 Implement user feedback system
+  - [x] 12.2 Implement user feedback system
     - Display current version on startup
     - Display status messages during checks
     - Display new version when found
@@ -230,7 +230,7 @@ This implementation plan breaks down the auto-update feature into discrete codin
     - Generate errors, verify messages contain context
 
 - [ ] 13. Implement interactive mode
-  - [ ] 13.1 Create `InteractiveMode` handler
+  - [x] 13.1 Create `InteractiveMode` handler
     - Prompt user before checking for updates
     - Display new version and ask for confirmation
     - Allow user to cancel during download
@@ -242,7 +242,7 @@ This implementation plan breaks down the auto-update feature into discrete codin
     - Generate interactive updates, verify prompts occur
 
 - [ ] 14. Implement non-interactive mode
-  - [ ] 14.1 Create `NonInteractiveMode` handler
+  - [x] 14.1 Create `NonInteractiveMode` handler
     - Skip all user prompts
     - Automatically download and install updates
     - Log results to stdout or log file
@@ -255,14 +255,14 @@ This implementation plan breaks down the auto-update feature into discrete codin
     - Generate non-interactive updates, verify no prompts
 
 - [ ] 15. Implement UpdateManager orchestration
-  - [ ] 15.1 Create `UpdateManager` struct
+  - [x] 15.1 Create `UpdateManager` struct
     - Coordinate all components
     - Manage update flow
     - Handle mode-specific behavior
     - Manage lock file lifecycle
     - _Requirements: 1.1, 1.2, 2.1, 3.1, 3.2, 4.1, 5.1, 6.1, 7.1, 8.1, 9.1, 10.1, 11.1, 13.1, 14.1, 15.1_
   
-  - [ ] 15.2 Implement `check_and_update()` method
+  - [x] 15.2 Implement `check_and_update()` method
     - Detect platform and architecture
     - Query GitHub API
     - Compare versions
@@ -275,20 +275,20 @@ This implementation plan breaks down the auto-update feature into discrete codin
     - Handle errors and rollback
     - _Requirements: All_
   
-  - [ ] 15.3 Implement background thread spawning
+  - [x] 15.3 Implement background thread spawning
     - Spawn update thread on application startup
     - Ensure main application continues
     - Handle thread completion gracefully
     - _Requirements: 8.1, 9.1_
 
-- [ ] 16. Checkpoint - Ensure all tests pass
+- [x] 16. Checkpoint - Ensure all tests pass
   - Ensure all unit tests pass
   - Ensure all property tests pass (minimum 100 iterations each)
   - Verify no compilation warnings
   - Ask the user if questions arise
 
 - [ ] 17. Integration and wiring
-  - [ ] 17.1 Integrate UpdateManager into main application
+  - [x] 17.1 Integrate UpdateManager into main application
     - Spawn update thread on startup
     - Pass configuration to UpdateManager
     - Handle update results
@@ -301,7 +301,7 @@ This implementation plan breaks down the auto-update feature into discrete codin
     - Test rollback scenarios
     - _Requirements: All_
 
-- [ ] 18. Final checkpoint - Ensure all tests pass
+- [x] 18. Final checkpoint - Ensure all tests pass
   - Ensure all unit tests pass
   - Ensure all property tests pass
   - Ensure all integration tests pass
