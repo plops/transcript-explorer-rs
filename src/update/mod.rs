@@ -445,6 +445,187 @@ impl AssetSelector {
     }
 }
 
+/// Callback trait for download progress reporting
+pub trait ProgressCallback: Send + Sync {
+    fn on_progress(&self, progress: DownloadProgress);
+}
+
+/// Download progress information
+#[derive(Debug, Clone)]
+pub struct DownloadProgress {
+    pub bytes_downloaded: u64,
+    pub total_bytes: u64,
+}
+
+impl DownloadProgress {
+    /// Get the progress as a percentage (0-100)
+    pub fn percentage(&self) -> f64 {
+        if self.total_bytes == 0 {
+            0.0
+        } else {
+            (self.bytes_downloaded as f64 / self.total_bytes as f64) * 100.0
+        }
+    }
+}
+
+/// Binary downloader for downloading release binaries with progress tracking
+pub struct BinaryDownloader {
+    http_client: reqwest::Client,
+}
+
+impl BinaryDownloader {
+    /// Create a new binary downloader
+    ///
+    /// Initializes with a reqwest::Client configured for downloads.
+    ///
+    /// # Returns
+    /// - `Ok(BinaryDownloader)` if creation succeeds
+    /// - `Err(UpdateError)` if client creation fails
+    ///
+    /// # Requirements
+    /// - 5.1: Use reqwest for HTTP downloads
+    /// - 5.2: Stream response body to disk
+    pub fn new() -> Result<Self, UpdateError> {
+        let http_client = reqwest::Client::builder()
+            .user_agent("transcript-explorer-updater/1.0")
+            .build()
+            .map_err(|e| UpdateError::HttpError(e))?;
+
+        Ok(Self { http_client })
+    }
+
+    /// Download a binary from the provided URL to a destination path
+    ///
+    /// Downloads the binary with progress tracking via callback, implements
+    /// retry logic with exponential backoff, and cleans up partial downloads
+    /// on failure.
+    ///
+    /// # Arguments
+    /// * `url` - The URL to download from
+    /// * `destination` - The file path to save to
+    /// * `progress_callback` - Optional callback for progress updates
+    ///
+    /// # Returns
+    /// - `Ok(())` if download succeeds
+    /// - `Err(UpdateError)` if download fails
+    ///
+    /// # Requirements
+    /// - 5.1: Download from provided URL
+    /// - 5.2: Report progress via callback
+    /// - 5.4: Implement retry logic with exponential backoff
+    /// - 5.5: Clean up partial downloads on failure
+    pub async fn download_binary(
+        &self,
+        url: &str,
+        destination: &std::path::Path,
+        progress_callback: Option<&dyn ProgressCallback>,
+    ) -> Result<(), UpdateError> {
+        const MAX_RETRIES: u32 = 3;
+        const INITIAL_BACKOFF_MS: u64 = 100;
+
+        for attempt in 0..MAX_RETRIES {
+            match self.download_with_progress(url, destination, progress_callback).await {
+                Ok(()) => return Ok(()),
+                Err(e) if e.is_retryable() && attempt < MAX_RETRIES - 1 => {
+                    // Calculate exponential backoff: 100ms, 200ms, 400ms
+                    let backoff_ms = INITIAL_BACKOFF_MS * (2_u64.pow(attempt));
+                    tokio::time::sleep(tokio::time::Duration::from_millis(backoff_ms)).await;
+                    // Clean up partial download before retry
+                    let _ = std::fs::remove_file(destination);
+                    continue;
+                }
+                Err(e) => {
+                    // Clean up partial download on final failure
+                    let _ = std::fs::remove_file(destination);
+                    return Err(e);
+                }
+            }
+        }
+
+        // Clean up partial download if we exhausted retries
+        let _ = std::fs::remove_file(destination);
+        Err(UpdateError::Download {
+            reason: "Download failed after maximum retries".to_string(),
+            retryable: false,
+        })
+    }
+
+    /// Internal method to perform the actual download with progress tracking
+    async fn download_with_progress(
+        &self,
+        url: &str,
+        destination: &std::path::Path,
+        progress_callback: Option<&dyn ProgressCallback>,
+    ) -> Result<(), UpdateError> {
+        let response = self
+            .http_client
+            .get(url)
+            .send()
+            .await
+            .map_err(|e| {
+                let retryable = e.is_timeout() || e.is_connect();
+                UpdateError::Download {
+                    reason: format!("Failed to connect: {}", e),
+                    retryable,
+                }
+            })?;
+
+        let status = response.status();
+        if !status.is_success() {
+            return Err(UpdateError::Download {
+                reason: format!("HTTP error: {}", status),
+                retryable: status.is_server_error(),
+            });
+        }
+
+        let total_bytes = response
+            .content_length()
+            .ok_or_else(|| UpdateError::Download {
+                reason: "Server did not provide content length".to_string(),
+                retryable: false,
+            })?;
+
+        let mut file = std::fs::File::create(destination).map_err(|e| {
+            UpdateError::Download {
+                reason: format!("Failed to create file: {}", e),
+                retryable: false,
+            }
+        })?;
+
+        let mut stream = response.bytes_stream();
+        let mut bytes_downloaded: u64 = 0;
+
+        use futures_util::StreamExt;
+
+        while let Some(chunk) = stream.next().await {
+            let chunk = chunk.map_err(|e| {
+                UpdateError::Download {
+                    reason: format!("Download interrupted: {}", e),
+                    retryable: true,
+                }
+            })?;
+
+            std::io::Write::write_all(&mut file, &chunk).map_err(|e| {
+                UpdateError::Download {
+                    reason: format!("Failed to write to file: {}", e),
+                    retryable: false,
+                }
+            })?;
+
+            bytes_downloaded += chunk.len() as u64;
+
+            if let Some(callback) = progress_callback {
+                callback.on_progress(DownloadProgress {
+                    bytes_downloaded,
+                    total_bytes,
+                });
+            }
+        }
+
+        Ok(())
+    }
+}
+
 /// GitHub API client for fetching release information
 pub struct GitHubApiClient {
     repo_owner: String,
@@ -1109,6 +1290,153 @@ mod tests {
         let selected = result.unwrap();
         // Should select the first matching asset
         assert_eq!(selected.name, "transcript-explorer-linux-x86_64-v1");
+    }
+
+    // Binary downloader tests
+    #[test]
+    fn test_binary_downloader_creation() {
+        let result = BinaryDownloader::new();
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn test_download_progress_percentage() {
+        let progress = DownloadProgress {
+            bytes_downloaded: 50,
+            total_bytes: 100,
+        };
+        assert_eq!(progress.percentage(), 50.0);
+
+        let progress = DownloadProgress {
+            bytes_downloaded: 0,
+            total_bytes: 100,
+        };
+        assert_eq!(progress.percentage(), 0.0);
+
+        let progress = DownloadProgress {
+            bytes_downloaded: 100,
+            total_bytes: 100,
+        };
+        assert_eq!(progress.percentage(), 100.0);
+
+        let progress = DownloadProgress {
+            bytes_downloaded: 0,
+            total_bytes: 0,
+        };
+        assert_eq!(progress.percentage(), 0.0);
+    }
+
+    #[tokio::test]
+    async fn test_binary_downloader_download_success() {
+        // Create a temporary file to serve as the destination
+        let temp_dir = tempfile::tempdir().expect("Failed to create temp dir");
+        let dest_path = temp_dir.path().join("test_binary");
+
+        let downloader = BinaryDownloader::new().expect("Failed to create downloader");
+
+        // Use a small test file from a reliable source
+        // httpbin.org provides a simple way to test downloads
+        let url = "https://httpbin.org/bytes/1024";
+
+        let result = downloader
+            .download_binary(url, &dest_path, None)
+            .await;
+
+        // The download should succeed
+        assert!(result.is_ok(), "Download failed: {:?}", result);
+
+        // Verify the file was created
+        assert!(dest_path.exists(), "Downloaded file does not exist");
+
+        // Verify the file has content
+        let metadata = std::fs::metadata(&dest_path).expect("Failed to get file metadata");
+        assert_eq!(metadata.len(), 1024, "Downloaded file has incorrect size");
+    }
+
+    #[tokio::test]
+    async fn test_binary_downloader_download_with_progress() {
+        let temp_dir = tempfile::tempdir().expect("Failed to create temp dir");
+        let dest_path = temp_dir.path().join("test_binary");
+
+        let downloader = BinaryDownloader::new().expect("Failed to create downloader");
+
+        // Track progress updates
+        let progress_updates = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+        let progress_updates_clone = progress_updates.clone();
+
+        struct TestProgressCallback {
+            updates: std::sync::Arc<std::sync::Mutex<Vec<DownloadProgress>>>,
+        }
+
+        impl ProgressCallback for TestProgressCallback {
+            fn on_progress(&self, progress: DownloadProgress) {
+                self.updates.lock().unwrap().push(progress);
+            }
+        }
+
+        let callback = TestProgressCallback {
+            updates: progress_updates_clone,
+        };
+
+        let url = "https://httpbin.org/bytes/2048";
+
+        let result = downloader
+            .download_binary(url, &dest_path, Some(&callback))
+            .await;
+
+        assert!(result.is_ok(), "Download failed: {:?}", result);
+        assert!(dest_path.exists(), "Downloaded file does not exist");
+
+        // Verify progress was reported
+        let updates = progress_updates.lock().unwrap();
+        assert!(!updates.is_empty(), "No progress updates were reported");
+
+        // Verify the last update shows 100% progress
+        let last_update = updates.last().unwrap();
+        assert_eq!(last_update.bytes_downloaded, 2048);
+        assert_eq!(last_update.total_bytes, 2048);
+    }
+
+    #[tokio::test]
+    async fn test_binary_downloader_download_invalid_url() {
+        let temp_dir = tempfile::tempdir().expect("Failed to create temp dir");
+        let dest_path = temp_dir.path().join("test_binary");
+
+        let downloader = BinaryDownloader::new().expect("Failed to create downloader");
+
+        // Use an invalid URL that will fail
+        let url = "https://invalid-domain-that-does-not-exist-12345.com/file";
+
+        let result = downloader
+            .download_binary(url, &dest_path, None)
+            .await;
+
+        // The download should fail
+        assert!(result.is_err(), "Download should have failed");
+
+        // Verify the file was cleaned up
+        assert!(!dest_path.exists(), "Partial download file was not cleaned up");
+    }
+
+    #[tokio::test]
+    async fn test_binary_downloader_cleanup_on_failure() {
+        let temp_dir = tempfile::tempdir().expect("Failed to create temp dir");
+        let dest_path = temp_dir.path().join("test_binary");
+
+        let downloader = BinaryDownloader::new().expect("Failed to create downloader");
+
+        // Use a URL that returns 404
+        let url = "https://httpbin.org/status/404";
+
+        let result = downloader
+            .download_binary(url, &dest_path, None)
+            .await;
+
+        // The download should fail
+        assert!(result.is_err(), "Download should have failed");
+
+        // Verify the file was cleaned up
+        assert!(!dest_path.exists(), "Partial download file was not cleaned up");
     }
 }
 

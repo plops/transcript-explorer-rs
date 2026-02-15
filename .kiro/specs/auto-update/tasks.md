@@ -109,14 +109,14 @@ This implementation plan breaks down the auto-update feature into discrete codin
     - **Validates: Requirements 15.5**
     - Generate corrupted cache files, verify fallback to empty list
 
-- [ ] 7. Implement binary downloader
-  - [ ] 7.1 Create `BinaryDownloader` struct
+- [x] 7. Implement binary downloader
+  - [x] 7.1 Create `BinaryDownloader` struct
     - Use `reqwest` for HTTP downloads
     - Stream response body to disk
     - Implement progress callback mechanism
     - _Requirements: 5.1, 5.2_
   
-  - [ ] 7.2 Implement `download_binary()` method
+  - [x] 7.2 Implement `download_binary()` method
     - Download from provided URL
     - Report progress via callback
     - Implement retry logic with exponential backoff
