@@ -6,8 +6,8 @@ This implementation plan breaks down the Windows binary replacement fix into dis
 
 ## Tasks
 
-- [ ] 1. Implement Windows rename-move-cleanup pattern in BinaryReplacer
-  - [ ] 1.1 Modify BinaryReplacer::perform_replacement() for Windows
+- [x] 1. Implement Windows rename-move-cleanup pattern in BinaryReplacer
+  - [x] 1.1 Modify BinaryReplacer::perform_replacement() for Windows
     - Replace the `fs::copy()` call with rename-move-cleanup sequence
     - Rename current executable to `.old` backup
     - Move new executable to original location
@@ -20,7 +20,7 @@ This implementation plan breaks down the Windows binary replacement fix into dis
     - Generate random executable paths and verify new executable ends up at original location
     - Verify backup file exists after successful replacement
   
-  - [ ] 1.3 Verify Unix atomic rename behavior remains unchanged
+  - [x] 1.3 Verify Unix atomic rename behavior remains unchanged
     - Ensure Unix code path still uses `fs::rename()` for atomic operation
     - No changes to Unix implementation
     - _Requirements: 3.1_
@@ -31,13 +31,13 @@ This implementation plan breaks down the Windows binary replacement fix into dis
     - Generate random executable paths and verify atomic rename works
     - Verify no backup file created on Unix
 
-- [ ] 2. Implement error handling for Windows replacement failures
-  - [ ] 2.1 Add error handling for rename operation failure
+- [x] 2. Implement error handling for Windows replacement failures
+  - [x] 2.1 Add error handling for rename operation failure
     - Catch errors when renaming current executable to `.old`
     - Return `UpdateError::Replacement` with descriptive reason
     - _Requirements: 4.1_
   
-  - [ ] 2.2 Add error handling for move operation failure
+  - [x] 2.2 Add error handling for move operation failure
     - Catch errors when moving new executable to original location
     - Attempt rollback by restoring backup file
     - Return error with rollback status
@@ -49,8 +49,8 @@ This implementation plan breaks down the Windows binary replacement fix into dis
     - Simulate various failure scenarios
     - Verify errors contain non-empty reason strings
 
-- [ ] 3. Implement backup file cleanup and failure tolerance
-  - [ ] 3.1 Implement graceful backup file deletion
+- [x] 3. Implement backup file cleanup and failure tolerance
+  - [x] 3.1 Implement graceful backup file deletion
     - Attempt to delete backup file after successful move
     - Ignore deletion failures (file may be locked by OS)
     - Log deletion failures as warnings, not errors
@@ -63,7 +63,7 @@ This implementation plan breaks down the Windows binary replacement fix into dis
     - Verify operation succeeds despite deletion failure
 
 - [ ] 4. Implement rollback and recovery logic
-  - [ ] 4.1 Implement rollback when move operation fails
+  - [x] 4.1 Implement rollback when move operation fails
     - Restore backup file to original location if move fails
     - Handle rollback failures gracefully
     - Preserve backup file for manual recovery
@@ -76,7 +76,7 @@ This implementation plan breaks down the Windows binary replacement fix into dis
     - Verify rollback restores original executable
 
 - [ ] 5. Implement backup file preservation
-  - [ ] 5.1 Ensure backup files are created and preserved
+  - [x] 5.1 Ensure backup files are created and preserved
     - Verify backup file exists after successful replacement
     - Verify backup file exists after failed replacement
     - _Requirements: 2.1, 3.3, 4.5_
@@ -94,7 +94,7 @@ This implementation plan breaks down the Windows binary replacement fix into dis
     - Verify backup file exists after failure
 
 - [ ] 6. Implement success result handling
-  - [ ] 6.1 Ensure successful replacements return Ok(())
+  - [x] 6.1 Ensure successful replacements return Ok(())
     - Verify return type is `Result<(), UpdateError>`
     - Return `Ok(())` on successful replacement
     - _Requirements: 3.4_
@@ -105,14 +105,14 @@ This implementation plan breaks down the Windows binary replacement fix into dis
     - Generate random executable paths
     - Verify successful operations return `Ok(())`
 
-- [ ] 7. Checkpoint - Verify implementation compiles and basic tests pass
+- [x] 7. Checkpoint - Verify implementation compiles and basic tests pass
   - Ensure code compiles without errors or warnings
   - Run existing unit tests to verify no regressions
   - Verify Windows-specific code compiles on Windows target
   - Ask the user if questions arise.
 
-- [ ] 8. Run comprehensive test suite
-  - [ ] 8.1 Run all unit tests for BinaryReplacer
+- [x] 8. Run comprehensive test suite
+  - [x] 8.1 Run all unit tests for BinaryReplacer
     - Test successful Windows replacement
     - Test successful Unix replacement
     - Test rename failure handling
@@ -133,7 +133,7 @@ This implementation plan breaks down the Windows binary replacement fix into dis
     - Minimum 100 iterations per property test
     - _Requirements: 5.1, 5.3_
 
-- [ ] 9. Final checkpoint - Ensure all tests pass
+- [x] 9. Final checkpoint - Ensure all tests pass
   - Ensure all unit tests pass
   - Ensure all property-based tests pass
   - Verify no regressions in existing functionality

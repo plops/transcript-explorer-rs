@@ -1037,15 +1037,33 @@ impl BinaryReplacer {
 
         #[cfg(windows)]
         {
-            // On Windows, we need to copy the new binary over the old one
-            // The running process can continue from memory
-            fs::copy(new_path, current_path).map_err(|e| UpdateError::Replacement {
-                reason: format!("Failed to replace binary: {}", e),
+            // On Windows, we cannot overwrite a running executable directly.
+            // Use the standard Windows pattern:
+            // 1. Rename current executable to .old (backup)
+            // 2. Move new executable to original location
+            // 3. Attempt to delete backup (ignore if locked)
+
+            let backup_path = current_path.with_extension("exe.old");
+
+            // Step 1: Rename current executable to backup
+            fs::rename(current_path, &backup_path).map_err(|e| UpdateError::Replacement {
+                reason: format!("Failed to rename current executable to backup: {}", e),
                 recovered: false,
             })?;
 
-            // Remove the temporary new binary
-            let _ = fs::remove_file(new_path);
+            // Step 2: Move new executable to original location
+            if let Err(e) = fs::rename(new_path, current_path) {
+                // If move fails, attempt to restore backup
+                let restore_result = fs::rename(&backup_path, current_path);
+                let recovered = restore_result.is_ok();
+                return Err(UpdateError::Replacement {
+                    reason: format!("Failed to move new executable to original location: {}", e),
+                    recovered,
+                });
+            }
+
+            // Step 3: Attempt to delete backup file (ignore failures - file may be locked)
+            let _ = fs::remove_file(&backup_path);
         }
 
         Ok(())
