@@ -626,6 +626,86 @@ impl BinaryDownloader {
     }
 }
 
+/// Result of binary verification
+#[derive(Debug, Clone)]
+pub struct VerificationResult {
+    pub is_valid: bool,
+    pub file_size: u64,
+    pub expected_size: u64,
+}
+
+/// Binary verifier for checking downloaded binary integrity
+pub struct BinaryVerifier;
+
+impl BinaryVerifier {
+    /// Verify a downloaded binary
+    ///
+    /// Checks file existence and readability, verifies file size matches
+    /// expected size, and deletes corrupted files automatically.
+    ///
+    /// # Arguments
+    /// * `path` - Path to the binary file to verify
+    /// * `expected_size` - Expected file size in bytes from release metadata
+    ///
+    /// # Returns
+    /// - `Ok(VerificationResult)` with verification details
+    /// - `Err(UpdateError)` if verification fails
+    ///
+    /// # Requirements
+    /// - 6.1: Check file existence and readability
+    /// - 6.2: Verify file size matches expected size
+    /// - 6.3: Proceed with replacement if verification succeeds
+    /// - 6.4: Return verification error and delete corrupted file if size mismatch
+    /// - 6.5: Return file access error if file is not readable
+    pub fn verify_binary(
+        path: &std::path::Path,
+        expected_size: u64,
+    ) -> Result<VerificationResult, UpdateError> {
+        // Check file existence
+        if !path.exists() {
+            return Err(UpdateError::Verification {
+                reason: format!("File does not exist: {}", path.display()),
+            });
+        }
+
+        // Check file readability by attempting to open it
+        let file = std::fs::File::open(path).map_err(|e| {
+            UpdateError::Verification {
+                reason: format!("File is not readable: {}", e),
+            }
+        })?;
+
+        // Get file metadata to check size
+        let metadata = file.metadata().map_err(|e| {
+            UpdateError::Verification {
+                reason: format!("Failed to read file metadata: {}", e),
+            }
+        })?;
+
+        let actual_size = metadata.len();
+
+        // Verify file size matches expected size
+        if actual_size != expected_size {
+            // Delete corrupted file automatically
+            let _ = std::fs::remove_file(path);
+
+            return Err(UpdateError::Verification {
+                reason: format!(
+                    "File size mismatch: expected {} bytes, got {} bytes",
+                    expected_size, actual_size
+                ),
+            });
+        }
+
+        // Verification succeeded
+        Ok(VerificationResult {
+            is_valid: true,
+            file_size: actual_size,
+            expected_size,
+        })
+    }
+}
+
 /// GitHub API client for fetching release information
 pub struct GitHubApiClient {
     repo_owner: String,
@@ -1437,6 +1517,150 @@ mod tests {
 
         // Verify the file was cleaned up
         assert!(!dest_path.exists(), "Partial download file was not cleaned up");
+    }
+
+    // Binary verifier tests
+    #[test]
+    fn test_binary_verifier_success() {
+        let temp_dir = tempfile::tempdir().expect("Failed to create temp dir");
+        let file_path = temp_dir.path().join("test_binary");
+
+        // Create a test file with known size
+        let test_data = b"test binary content";
+        std::fs::write(&file_path, test_data).expect("Failed to write test file");
+
+        let expected_size = test_data.len() as u64;
+
+        let result = BinaryVerifier::verify_binary(&file_path, expected_size);
+
+        assert!(result.is_ok(), "Verification should succeed");
+        let verification = result.unwrap();
+        assert!(verification.is_valid);
+        assert_eq!(verification.file_size, expected_size);
+        assert_eq!(verification.expected_size, expected_size);
+    }
+
+    #[test]
+    fn test_binary_verifier_file_not_found() {
+        let temp_dir = tempfile::tempdir().expect("Failed to create temp dir");
+        let file_path = temp_dir.path().join("nonexistent_file");
+
+        let result = BinaryVerifier::verify_binary(&file_path, 1024);
+
+        assert!(result.is_err(), "Verification should fail for nonexistent file");
+        match result {
+            Err(UpdateError::Verification { reason }) => {
+                assert!(reason.contains("does not exist"));
+            }
+            _ => panic!("Expected Verification error"),
+        }
+    }
+
+    #[test]
+    fn test_binary_verifier_size_mismatch() {
+        let temp_dir = tempfile::tempdir().expect("Failed to create temp dir");
+        let file_path = temp_dir.path().join("test_binary");
+
+        // Create a test file with known size
+        let test_data = b"test binary content";
+        std::fs::write(&file_path, test_data).expect("Failed to write test file");
+
+        let actual_size = test_data.len() as u64;
+        let expected_size = actual_size + 100; // Wrong size
+
+        let result = BinaryVerifier::verify_binary(&file_path, expected_size);
+
+        assert!(result.is_err(), "Verification should fail for size mismatch");
+        match result {
+            Err(UpdateError::Verification { reason }) => {
+                assert!(reason.contains("size mismatch"));
+                assert!(reason.contains(&expected_size.to_string()));
+                assert!(reason.contains(&actual_size.to_string()));
+            }
+            _ => panic!("Expected Verification error"),
+        }
+
+        // Verify the corrupted file was deleted
+        assert!(!file_path.exists(), "Corrupted file should be deleted");
+    }
+
+    #[test]
+    fn test_binary_verifier_unreadable_file() {
+        // This test is platform-specific and may not work on all systems
+        // On Unix systems, we can create a file with no read permissions
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+
+            let temp_dir = tempfile::tempdir().expect("Failed to create temp dir");
+            let file_path = temp_dir.path().join("test_binary");
+
+            // Create a test file
+            let test_data = b"test binary content";
+            std::fs::write(&file_path, test_data).expect("Failed to write test file");
+
+            // Remove read permissions
+            let mut perms = std::fs::metadata(&file_path)
+                .expect("Failed to get metadata")
+                .permissions();
+            perms.set_mode(0o000); // No permissions
+            std::fs::set_permissions(&file_path, perms).expect("Failed to set permissions");
+
+            let expected_size = test_data.len() as u64;
+            let result = BinaryVerifier::verify_binary(&file_path, expected_size);
+
+            // Restore permissions for cleanup
+            let mut perms = std::fs::metadata(&file_path)
+                .expect("Failed to get metadata")
+                .permissions();
+            perms.set_mode(0o644);
+            std::fs::set_permissions(&file_path, perms).expect("Failed to set permissions");
+
+            assert!(result.is_err(), "Verification should fail for unreadable file");
+            match result {
+                Err(UpdateError::Verification { reason }) => {
+                    assert!(reason.contains("not readable"));
+                }
+                _ => panic!("Expected Verification error"),
+            }
+        }
+    }
+
+    #[test]
+    fn test_binary_verifier_zero_size_file() {
+        let temp_dir = tempfile::tempdir().expect("Failed to create temp dir");
+        let file_path = temp_dir.path().join("test_binary");
+
+        // Create an empty file
+        std::fs::write(&file_path, b"").expect("Failed to write test file");
+
+        let result = BinaryVerifier::verify_binary(&file_path, 0);
+
+        assert!(result.is_ok(), "Verification should succeed for zero-size file");
+        let verification = result.unwrap();
+        assert!(verification.is_valid);
+        assert_eq!(verification.file_size, 0);
+        assert_eq!(verification.expected_size, 0);
+    }
+
+    #[test]
+    fn test_binary_verifier_large_file() {
+        let temp_dir = tempfile::tempdir().expect("Failed to create temp dir");
+        let file_path = temp_dir.path().join("test_binary");
+
+        // Create a larger test file (1 MB)
+        let test_data = vec![0u8; 1024 * 1024];
+        std::fs::write(&file_path, &test_data).expect("Failed to write test file");
+
+        let expected_size = test_data.len() as u64;
+
+        let result = BinaryVerifier::verify_binary(&file_path, expected_size);
+
+        assert!(result.is_ok(), "Verification should succeed for large file");
+        let verification = result.unwrap();
+        assert!(verification.is_valid);
+        assert_eq!(verification.file_size, expected_size);
+        assert_eq!(verification.expected_size, expected_size);
     }
 }
 
