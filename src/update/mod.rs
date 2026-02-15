@@ -208,8 +208,8 @@ impl Default for UpdateConfiguration {
             enabled: true,
             check_interval_hours: 24,
             interactive_mode: true,
-            github_repo_owner: "your-org".to_string(),
-            github_repo_name: "transcript-explorer".to_string(),
+            github_repo_owner: "plops".to_string(),
+            github_repo_name: "transcript-explorer-rs".to_string(),
             temp_directory: std::env::temp_dir(),
             backup_directory: std::env::temp_dir(),
         }
