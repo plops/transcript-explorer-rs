@@ -167,6 +167,15 @@ pub struct App {
 
     // Status message
     pub status_msg: String,
+
+    // Update overlay state
+    pub update_overlay: crate::ui::update_overlay::UpdateOverlayState,
+
+    // Channel for receiving update messages
+    update_message_rx: Option<std::sync::mpsc::Receiver<crate::update::UpdateMessage>>,
+
+    // Channel for sending user responses
+    update_response_tx: Option<std::sync::mpsc::Sender<crate::update::UserResponse>>,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -211,6 +220,10 @@ impl App {
             field_stats: HashMap::new(),
             unique_models: Vec::new(),
             filter_builder_state: FilterBuilderState::Inactive,
+
+            update_overlay: crate::ui::update_overlay::UpdateOverlayState::new(),
+            update_message_rx: None,
+            update_response_tx: None,
         }
     }
 
@@ -222,6 +235,27 @@ impl App {
         self.apply_filter();
         self.status_msg = format!("{} transcripts loaded", self.all_items.len());
         Ok(())
+    }
+
+    /// Set the update channels for receiving messages and sending responses
+    pub fn set_update_channels(
+        &mut self,
+        message_rx: std::sync::mpsc::Receiver<crate::update::UpdateMessage>,
+        response_tx: std::sync::mpsc::Sender<crate::update::UserResponse>,
+    ) {
+        self.update_message_rx = Some(message_rx);
+        self.update_response_tx = Some(response_tx);
+    }
+
+    /// Poll for update messages and process them
+    pub fn poll_update_messages(&mut self) {
+        if let Some(rx) = &self.update_message_rx {
+            while let Ok(message) = rx.try_recv() {
+                if let Some(tx) = &self.update_response_tx {
+                    self.update_overlay.process_message(message, tx.clone());
+                }
+            }
+        }
     }
 
     pub fn extract_unique_models(&mut self) {

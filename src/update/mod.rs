@@ -6,6 +6,9 @@ use std::path::PathBuf;
 use std::str::FromStr;
 use thiserror::Error;
 
+pub mod messages;
+pub use messages::{UpdateChannels, UpdateMessage, UserResponse};
+
 /// Operating system types
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum OperatingSystem {
@@ -1785,6 +1788,45 @@ impl UpdateManager {
         })
     }
 
+    /// Create a new UpdateManager instance with TUI mode support
+    ///
+    /// # Arguments
+    /// * `config` - Update configuration
+    /// * `channels` - Update thread channels for TUI communication
+    ///
+    /// # Returns
+    /// A new UpdateManager or an error if initialization fails
+    pub fn new_with_tui_mode(
+        config: UpdateConfiguration,
+        channels: messages::UpdateThreadChannels,
+    ) -> Result<Self, UpdateError> {
+        // Validate configuration
+        config.validate()?;
+
+        // Detect platform
+        let platform = PlatformDetector::detect()?;
+
+        // Initialize lock manager
+        let lock_manager = LockFileManager::new()?;
+
+        // Load bad version tracker
+        let bad_version_tracker = BadVersionTracker::load()?;
+
+        // Create error handler
+        let error_handler = ErrorHandler::new();
+
+        // Create TUI mode handler
+        let _tui_handler = TuiModeHandler::new(channels, config.interactive_mode);
+
+        Ok(Self {
+            config,
+            platform,
+            lock_manager,
+            bad_version_tracker,
+            error_handler,
+        })
+    }
+
     /// Check for updates and perform update if available
     ///
     /// This is the main orchestration method that:
@@ -2011,6 +2053,106 @@ trait ModeHandler: Send + Sync {
     fn display_success(&self, new_version: &str);
     fn display_error(&self, error: &UpdateError);
     fn finish_progress(&self);
+}
+
+/// TUI mode handler for message-based communication with the TUI thread
+#[derive(Debug, Clone)]
+pub struct TuiModeHandler {
+    channels: messages::UpdateThreadChannels,
+    interactive: bool,
+}
+
+impl TuiModeHandler {
+    /// Create a new TUI mode handler
+    pub fn new(channels: messages::UpdateThreadChannels, interactive: bool) -> Self {
+        Self {
+            channels,
+            interactive,
+        }
+    }
+
+    /// Send a message to the TUI thread
+    fn send_message(&self, message: UpdateMessage) {
+        // Non-blocking send, ignore errors if TUI has shut down
+        let _ = self.channels.message_tx.send(message);
+    }
+
+    /// Wait for a response from the TUI thread
+    fn wait_for_response(&self) -> UserResponse {
+        // Blocking receive - waits for user input from TUI
+        if let Ok(mut rx) = self.channels.response_rx.lock() {
+            rx.recv().unwrap_or(UserResponse::Declined)
+        } else {
+            UserResponse::Declined
+        }
+    }
+}
+
+impl ModeHandler for TuiModeHandler {
+    fn prompt_before_check(&self) -> bool {
+        if !self.interactive {
+            return true;
+        }
+
+        self.send_message(UpdateMessage::CheckStarted);
+        true // In TUI mode, always proceed with check
+    }
+
+    fn prompt_for_update_confirmation(&self, new_version: &str) -> bool {
+        if !self.interactive {
+            return true;
+        }
+
+        self.send_message(UpdateMessage::ConfirmationRequired {
+            new_version: new_version.to_string(),
+        });
+
+        matches!(self.wait_for_response(), UserResponse::Confirmed)
+    }
+
+    fn check_for_cancellation(&self) -> bool {
+        // Check for cancellation without blocking
+        if let Ok(rx) = self.channels.response_rx.lock() {
+            match rx.try_recv() {
+                Ok(UserResponse::Declined) => true,
+                _ => false,
+            }
+        } else {
+            false
+        }
+    }
+
+    fn display_status(&self, _message: &str) {
+        // Status messages are sent as part of other message types
+        // This is a no-op in TUI mode
+    }
+
+    fn display_progress(&self, progress: &DownloadProgress) {
+        self.send_message(UpdateMessage::DownloadProgress {
+            downloaded_bytes: progress.bytes_downloaded,
+            total_bytes: progress.total_bytes,
+            percentage: progress.percentage(),
+        });
+    }
+
+    fn display_success(&self, new_version: &str) {
+        self.send_message(UpdateMessage::InstallComplete {
+            new_version: new_version.to_string(),
+        });
+    }
+
+    fn display_error(&self, error: &UpdateError) {
+        let handler = ErrorHandler::new();
+        self.send_message(UpdateMessage::Error {
+            message: handler.get_descriptive_message(error),
+            recovery_instructions: handler.get_recovery_action(error),
+            is_retryable: handler.is_retryable(error),
+        });
+    }
+
+    fn finish_progress(&self) {
+        self.send_message(UpdateMessage::DownloadComplete);
+    }
 }
 
 impl ModeHandler for InteractiveMode {

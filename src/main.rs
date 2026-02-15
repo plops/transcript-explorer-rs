@@ -178,19 +178,67 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             
             let target_db_path = if is_encrypted {
                 eprintln!("Detected encrypted database: {}", db_path.display());
+                
+                // Initialize terminal early for password input
+                let mut terminal = ratatui::init();
+                
                 let password = if let Some(p) = cli.password {
                     p
                 } else {
-                    eprint!("Enter password: ");
-                    read_password_with_stars()?
+                    // Use TUI-based password input
+                    let mut password_overlay = ui::password_overlay::PasswordInputOverlay::new(
+                        "Enter database password:".to_string()
+                    );
+                    
+                    let mut password_result = None;
+                    
+                    loop {
+                        terminal.draw(|frame| {
+                            password_overlay.render(frame);
+                        })?;
+                        
+                        if crossterm::event::poll(std::time::Duration::from_millis(100))? {
+                            match event::read()? {
+                                Event::Key(key) => {
+                                    if key.kind != KeyEventKind::Press {
+                                        continue;
+                                    }
+                                    
+                                    match password_overlay.handle_key(key) {
+                                        Some(ui::password_overlay::PasswordInputResult::Submit(pwd)) => {
+                                            password_result = Some(pwd);
+                                            break;
+                                        }
+                                        Some(ui::password_overlay::PasswordInputResult::Cancel) => {
+                                            ratatui::restore();
+                                            eprintln!("Password entry cancelled");
+                                            std::process::exit(1);
+                                        }
+                                        None => {}
+                                    }
+                                }
+                                _ => {}
+                            }
+                        }
+                    }
+                    
+                    password_result.unwrap_or_default()
                 };
                 
                 eprintln!("Decrypting to temporary file...");
                 let temp = tempfile::NamedTempFile::new()?;
-                codec::decrypt_stream(&db_path, temp.path(), Secret::new(password))?;
                 
-                _temp_file = temp; // extend lifetime
-                _temp_file.path().to_path_buf()
+                match codec::decrypt_stream(&db_path, temp.path(), Secret::new(password.clone())) {
+                    Ok(_) => {
+                        _temp_file = temp; // extend lifetime
+                        _temp_file.path().to_path_buf()
+                    }
+                    Err(e) => {
+                        ratatui::restore();
+                        eprintln!("Error: Failed to decrypt database: {}", e);
+                        std::process::exit(1);
+                    }
+                }
             } else {
                 db_path
             };
@@ -202,18 +250,29 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             let mut app = App::new(database);
             app.init().await?;
 
-            // Spawn background update thread
+            // Create update channels
+            let update_channels = update::UpdateChannels::new();
+            let (tui_channels, update_thread_channels) = update_channels.split();
+
+            // Set up update channels in the app
+            app.set_update_channels(tui_channels.message_rx, tui_channels.response_tx);
+
+            // Spawn background update thread with TUI mode
             let _update_thread = {
                 match update::UpdateConfiguration::load() {
                     Ok(config) => {
-                        match update::UpdateManager::new(config) {
-                            Ok(manager) => {
-                                Some(manager.spawn_background_thread())
+                        if config.enabled {
+                            match update::UpdateManager::new_with_tui_mode(config, update_thread_channels) {
+                                Ok(manager) => {
+                                    Some(manager.spawn_background_thread())
+                                }
+                                Err(e) => {
+                                    eprintln!("Warning: Failed to initialize update manager: {}", e.user_message());
+                                    None
+                                }
                             }
-                            Err(e) => {
-                                eprintln!("Warning: Failed to initialize update manager: {}", e.user_message());
-                                None
-                            }
+                        } else {
+                            None
                         }
                     }
                     Err(e) => {
@@ -251,6 +310,9 @@ async fn run_app(
     app: &mut App,
 ) -> Result<(), Box<dyn std::error::Error>> {
     loop {
+        // Poll for update messages at the start of each loop iteration
+        app.poll_update_messages();
+
         terminal.draw(|frame| ui::render(app, frame))?;
 
         if app.should_quit {
@@ -264,6 +326,14 @@ async fn run_app(
                     if key.kind != KeyEventKind::Press {
                         continue;
                     }
+
+                    // Handle update overlay key events if overlay is visible
+                    if app.update_overlay.is_visible() {
+                        if app.update_overlay.handle_key(key) {
+                            continue; // Skip normal key handling if overlay handled it
+                        }
+                    }
+
                     handle_key(app, key).await?;
                 }
                 Event::Resize(_, height) => {
