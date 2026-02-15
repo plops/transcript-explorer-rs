@@ -43,22 +43,39 @@ jobs:
       - name: Rust Cache
         uses: Swatinem/rust-cache@v2
 
+      - name: Install Zipsign
+        run: cargo install zipsign
+
       - name: Build release
         run: cargo build --release --target ${{ matrix.target }}
 
-      - name: Prepare assets
+      - name: Prepare and Sign assets
         shell: bash
         run: |
           if [ "${{ matrix.os }}" = "windows-latest" ]; then
+            # Windows Archive
             powershell -Command "Compress-Archive -Path target/${{ matrix.target }}/release/${{ matrix.artifact_name }} -DestinationPath ${{ matrix.asset_name }}.zip"
+            # Sign Asset
+            echo "${{ secrets.ZIPSIGN_PRIV_KEY }}" | base64 -d > zipsign.priv
+            zipsign sign zip "${{ matrix.asset_name }}.zip" zipsign.priv
+            rm zipsign.priv
           else
+            # Unix Archive
             tar czf "${{ matrix.asset_name }}.tar.gz" -C target/${{ matrix.target }}/release "${{ matrix.artifact_name }}"
+            # Sign Asset
+            echo "${{ secrets.ZIPSIGN_PRIV_KEY }}" | base64 -d > zipsign.priv
+            zipsign sign tar "${{ matrix.asset_name }}.tar.gz" zipsign.priv
+            rm zipsign.priv
           fi
+        env:
+          ZIPSIGN_PASSWORD: ${{ secrets.ZIPSIGN_PASSWORD }}
 
       - name: Upload assets to release
         uses: softprops/action-gh-release@v2
         if: startsWith(github.ref, 'refs/tags/')
         with:
-          files: ${{ matrix.asset_name }}.*
+          files: |
+            ${{ matrix.asset_name }}.tar.gz
+            ${{ matrix.asset_name }}.zip
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

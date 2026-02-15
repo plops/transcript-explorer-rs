@@ -789,7 +789,8 @@ impl BinaryVerifier {
     /// Verify a downloaded binary
     ///
     /// Checks file existence and readability, verifies file size matches
-    /// expected size, and deletes corrupted files automatically.
+    /// expected size, verifies the signature using the embedded public key,
+    /// and deletes corrupted files automatically.
     ///
     /// # Arguments
     /// * `path` - Path to the binary file to verify
@@ -802,9 +803,10 @@ impl BinaryVerifier {
     /// # Requirements
     /// - 6.1: Check file existence and readability
     /// - 6.2: Verify file size matches expected size
-    /// - 6.3: Proceed with replacement if verification succeeds
-    /// - 6.4: Return verification error and delete corrupted file if size mismatch
-    /// - 6.5: Return file access error if file is not readable
+    /// - 6.3: Verify signature using embedded public key
+    /// - 6.4: Proceed with replacement if verification succeeds
+    /// - 6.5: Return verification error and delete corrupted file if size mismatch
+    /// - 6.6: Return file access error if file is not readable
     pub fn verify_binary(
         path: &std::path::Path,
         expected_size: u64,
@@ -845,12 +847,33 @@ impl BinaryVerifier {
             });
         }
 
+        // Verify signature using embedded public key
+        Self::verify_signature(path)?;
+
         // Verification succeeded
         Ok(VerificationResult {
             is_valid: true,
             file_size: actual_size,
             expected_size,
         })
+    }
+
+    /// Verify the signature of the downloaded archive
+    ///
+    /// Uses the embedded public key to verify the zipsign signature
+    /// embedded in the archive.
+    fn verify_signature(path: &std::path::Path) -> Result<(), UpdateError> {
+        // Embed public key (ensure zipsign.pub is in project root)
+        let public_key: [u8; 32] = *include_bytes!("../zipsign.pub");
+
+        // Verify the archive signature
+        zipsign::verify(path, &[public_key]).map_err(|e| {
+            UpdateError::Verification {
+                reason: format!("Signature verification failed: {}", e),
+            }
+        })?;
+
+        Ok(())
     }
 }
 
