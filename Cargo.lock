@@ -488,6 +488,7 @@ dependencies = [
  "iana-time-zone",
  "js-sys",
  "num-traits",
+ "serde",
  "wasm-bindgen",
  "windows-link",
 ]
@@ -4162,7 +4163,10 @@ dependencies = [
  "regex",
  "reqwest",
  "rpassword",
+ "serde",
+ "serde_json",
  "tempfile",
+ "thiserror 1.0.69",
  "tokio",
  "tui-markdown",
  "turso",

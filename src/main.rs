@@ -2,6 +2,7 @@ mod app;
 mod codec;
 mod db;
 mod ui;
+mod update;
 
 use app::{App, DetailTab, InputMode, View};
 use clap::{Parser, Subcommand};
