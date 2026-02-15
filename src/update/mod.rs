@@ -93,6 +93,9 @@ pub enum UpdateError {
     #[error("Update already in progress")]
     LockFileExists,
 
+    #[error("Lock file error: {0}")]
+    LockFileError(String),
+
     #[error("Configuration error: {0}")]
     ConfigurationError(String),
 
@@ -151,6 +154,9 @@ impl UpdateError {
             UpdateError::LockFileExists => {
                 "An update is already in progress".to_string()
             }
+            UpdateError::LockFileError(msg) => {
+                format!("Lock file error: {}", msg)
+            }
             UpdateError::ConfigurationError(msg) => {
                 format!("Configuration error: {}", msg)
             }
@@ -172,6 +178,10 @@ impl UpdateError {
             }
             UpdateError::Replacement { recovered: false, .. } => {
                 Some("A backup of your previous binary may be available in the backup directory"
+                    .to_string())
+            }
+            UpdateError::LockFileExists => {
+                Some("Wait for the current update to complete or manually remove the lock file"
                     .to_string())
             }
             _ => None,
@@ -1026,6 +1036,181 @@ impl GitHubApiClient {
             assets,
             body: github_release.body.unwrap_or_default(),
         })
+    }
+}
+
+/// Manages lock files to prevent concurrent update operations
+///
+/// The LockFileManager ensures that only one update process runs at a time
+/// by creating and checking lock files. It also cleans up stale lock files
+/// on startup to handle crashes during updates.
+///
+/// # Requirements
+/// - 13.1: Create lock file on update start
+/// - 13.2: Check for existing lock file
+/// - 13.3: Remove lock file on completion
+/// - 13.4: Clean up stale lock files on startup
+pub struct LockFileManager {
+    lock_path: std::path::PathBuf,
+}
+
+impl LockFileManager {
+    /// Create a new LockFileManager
+    ///
+    /// Initializes the lock file manager with a path in the system's cache directory.
+    /// Uses the `directories` crate to get the appropriate cache directory for the platform.
+    ///
+    /// # Returns
+    /// - `Ok(LockFileManager)` if initialization succeeds
+    /// - `Err(UpdateError)` if the cache directory cannot be determined
+    ///
+    /// # Requirements
+    /// - 13.1, 13.4: Initialize with cache directory path
+    pub fn new() -> Result<Self, UpdateError> {
+        let cache_dir = directories::ProjectDirs::from("", "", "transcript-explorer")
+            .ok_or_else(|| {
+                UpdateError::LockFileError("Cannot determine cache directory".to_string())
+            })?
+            .cache_dir()
+            .to_path_buf();
+
+        // Create cache directory if it doesn't exist
+        std::fs::create_dir_all(&cache_dir).map_err(|e| {
+            UpdateError::LockFileError(format!("Cannot create cache directory: {}", e))
+        })?;
+
+        let lock_path = cache_dir.join("update.lock");
+
+        Ok(Self { lock_path })
+    }
+
+    /// Create a new LockFileManager with a custom path (for testing)
+    ///
+    /// # Arguments
+    /// * `lock_path` - Custom path for the lock file
+    ///
+    /// # Returns
+    /// - `Ok(LockFileManager)` if initialization succeeds
+    /// - `Err(UpdateError)` if the parent directory cannot be created
+    #[cfg(test)]
+    pub fn with_path(lock_path: std::path::PathBuf) -> Result<Self, UpdateError> {
+        // Create parent directory if it doesn't exist
+        if let Some(parent) = lock_path.parent() {
+            std::fs::create_dir_all(parent).map_err(|e| {
+                UpdateError::LockFileError(format!("Cannot create lock directory: {}", e))
+            })?;
+        }
+
+        Ok(Self { lock_path })
+    }
+
+    /// Check if an update is already in progress
+    ///
+    /// Returns true if a lock file exists, indicating another update process
+    /// is running or crashed.
+    ///
+    /// # Returns
+    /// - `true` if lock file exists
+    /// - `false` if lock file does not exist
+    ///
+    /// # Requirements
+    /// - 13.2: Check for existing lock file
+    pub fn is_locked(&self) -> bool {
+        self.lock_path.exists()
+    }
+
+    /// Create a lock file to indicate an update is in progress
+    ///
+    /// Creates a lock file with the current process ID and timestamp.
+    /// If a lock file already exists, returns an error.
+    ///
+    /// # Returns
+    /// - `Ok(())` if lock file is created successfully
+    /// - `Err(UpdateError)` if lock file already exists or creation fails
+    ///
+    /// # Requirements
+    /// - 13.1: Create lock file on update start
+    /// - 13.2: Check for existing lock file
+    pub fn acquire_lock(&self) -> Result<(), UpdateError> {
+        if self.is_locked() {
+            return Err(UpdateError::LockFileExists);
+        }
+
+        let lock_content = format!(
+            "pid={}\ntimestamp={}\n",
+            std::process::id(),
+            chrono::Utc::now().to_rfc3339()
+        );
+
+        std::fs::write(&self.lock_path, lock_content).map_err(|e| {
+            UpdateError::LockFileError(format!("Cannot create lock file: {}", e))
+        })?;
+
+        Ok(())
+    }
+
+    /// Remove the lock file to indicate the update is complete
+    ///
+    /// Removes the lock file after the update process completes,
+    /// whether successful or failed.
+    ///
+    /// # Returns
+    /// - `Ok(())` if lock file is removed successfully
+    /// - `Err(UpdateError)` if removal fails
+    ///
+    /// # Requirements
+    /// - 13.3: Remove lock file on completion
+    pub fn release_lock(&self) -> Result<(), UpdateError> {
+        if self.lock_path.exists() {
+            std::fs::remove_file(&self.lock_path).map_err(|e| {
+                UpdateError::LockFileError(format!("Cannot remove lock file: {}", e))
+            })?;
+        }
+
+        Ok(())
+    }
+
+    /// Clean up stale lock files on startup
+    ///
+    /// Removes lock files that are older than a threshold (e.g., 1 hour),
+    /// indicating a crashed update process. This prevents the system from
+    /// being stuck in a locked state after a crash.
+    ///
+    /// # Arguments
+    /// * `max_age_secs` - Maximum age of lock file in seconds before it's considered stale
+    ///
+    /// # Returns
+    /// - `Ok(())` if cleanup succeeds (or no stale lock file exists)
+    /// - `Err(UpdateError)` if cleanup fails
+    ///
+    /// # Requirements
+    /// - 13.4: Clean up stale lock files on startup
+    pub fn cleanup_stale_lock(&self, max_age_secs: u64) -> Result<(), UpdateError> {
+        if !self.lock_path.exists() {
+            return Ok(());
+        }
+
+        let metadata = std::fs::metadata(&self.lock_path).map_err(|e| {
+            UpdateError::LockFileError(format!("Cannot read lock file metadata: {}", e))
+        })?;
+
+        let modified_time = metadata.modified().map_err(|e| {
+            UpdateError::LockFileError(format!("Cannot get lock file modification time: {}", e))
+        })?;
+
+        let elapsed = modified_time
+            .elapsed()
+            .map_err(|e| {
+                UpdateError::LockFileError(format!("Cannot calculate lock file age: {}", e))
+            })?;
+
+        if elapsed.as_secs() >= max_age_secs {
+            std::fs::remove_file(&self.lock_path).map_err(|e| {
+                UpdateError::LockFileError(format!("Cannot remove stale lock file: {}", e))
+            })?;
+        }
+
+        Ok(())
     }
 }
 
@@ -2139,4 +2324,104 @@ mod property_tests {
             prop_assert!(!backup_path.exists());
         }
     }
+
+    // Tests for LockFileManager
+    #[test]
+    fn test_lock_file_manager_creation() {
+        let result = LockFileManager::new();
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn test_lock_file_manager_acquire_and_release() {
+        let temp_dir = tempfile::tempdir().expect("Failed to create temp dir");
+        let lock_path = temp_dir.path().join("test_acquire_release.lock");
+        let manager = LockFileManager::with_path(lock_path).expect("Failed to create manager");
+
+        // Initially, should not be locked
+        assert!(!manager.is_locked());
+
+        // Acquire lock
+        let result = manager.acquire_lock();
+        assert!(result.is_ok(), "Failed to acquire lock: {:?}", result);
+        assert!(manager.is_locked(), "Lock file should exist after acquire_lock");
+
+        // Release lock
+        let result = manager.release_lock();
+        assert!(result.is_ok());
+        assert!(!manager.is_locked());
+    }
+
+    #[test]
+    fn test_lock_file_manager_prevent_concurrent_locks() {
+        let temp_dir = tempfile::tempdir().expect("Failed to create temp dir");
+        let lock_path = temp_dir.path().join("test_concurrent.lock");
+        let manager = LockFileManager::with_path(lock_path).expect("Failed to create manager");
+
+        // Acquire first lock
+        let result = manager.acquire_lock();
+        assert!(result.is_ok());
+
+        // Try to acquire second lock - should fail
+        let result = manager.acquire_lock();
+        assert!(result.is_err());
+        match result {
+            Err(UpdateError::LockFileExists) => {
+                // Expected error
+            }
+            _ => panic!("Expected LockFileExists error"),
+        }
+
+        // Clean up
+        let _ = manager.release_lock();
+    }
+
+    #[test]
+    fn test_lock_file_manager_cleanup_stale_lock() {
+        let temp_dir = tempfile::tempdir().expect("Failed to create temp dir");
+        let lock_path = temp_dir.path().join("test_cleanup_stale.lock");
+        let manager = LockFileManager::with_path(lock_path).expect("Failed to create manager");
+
+        // Acquire lock
+        let result = manager.acquire_lock();
+        assert!(result.is_ok());
+        assert!(manager.is_locked());
+
+        // Cleanup with 0 seconds max age - should remove the lock
+        let result = manager.cleanup_stale_lock(0);
+        assert!(result.is_ok());
+        assert!(!manager.is_locked(), "Lock file should be removed after cleanup_stale_lock(0)");
+    }
+
+    #[test]
+    fn test_lock_file_manager_cleanup_preserves_fresh_lock() {
+        let temp_dir = tempfile::tempdir().expect("Failed to create temp dir");
+        let lock_path = temp_dir.path().join("test_cleanup_fresh.lock");
+        let manager = LockFileManager::with_path(lock_path).expect("Failed to create manager");
+
+        // Acquire lock
+        let result = manager.acquire_lock();
+        assert!(result.is_ok());
+        assert!(manager.is_locked());
+
+        // Cleanup with large max age - should preserve the lock
+        let result = manager.cleanup_stale_lock(3600); // 1 hour
+        assert!(result.is_ok());
+        assert!(manager.is_locked(), "Lock file should be preserved with large max_age");
+
+        // Clean up
+        let _ = manager.release_lock();
+    }
+
+    #[test]
+    fn test_lock_file_manager_release_nonexistent_lock() {
+        let temp_dir = tempfile::tempdir().expect("Failed to create temp dir");
+        let lock_path = temp_dir.path().join("test_release_nonexistent.lock");
+        let manager = LockFileManager::with_path(lock_path).expect("Failed to create manager");
+
+        // Release lock that doesn't exist - should succeed
+        let result = manager.release_lock();
+        assert!(result.is_ok());
+    }
 }
+
