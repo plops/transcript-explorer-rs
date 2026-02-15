@@ -14,8 +14,8 @@ This implementation plan breaks down the auto-update feature into discrete codin
   - Add dependencies: `reqwest`, `serde`, `serde_json`, `directories`, `indicatif`
   - _Requirements: 1.1, 1.2, 2.1, 2.2_
 
-- [-] 2. Implement platform detection
-  - [ ] 2.1 Implement `PlatformDetector` with platform and architecture detection
+- [x] 2. Implement platform detection
+  - [x] 2.1 Implement `PlatformDetector` with platform and architecture detection
     - Use `std::env::consts::OS` and `std::env::consts::ARCH`
     - Map Rust architecture names to release asset naming conventions
     - Return `PlatformInfo` with OS and architecture
